@@ -1,0 +1,94 @@
+<Window x:Class="WebcamStreamerUi.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:WebcamStreamerUi"
+        Title="Webcam Streamer"
+        Height="520" Width="980"
+        Background="#1E1E1E" Foreground="#DDD"
+        FontFamily="Segoe UI">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin"  Value="2"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <ToolBar DockPanel.Dock="Top" Background="#2D2D30">
+            <Button Content="Refresh" Click="Refresh_Click"/>
+            <Separator/>
+            <Button Content="Shut down supervisor" Click="Shutdown_Click"/>
+            <Separator/>
+            <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#AAA"
+                       Text="LAN URL pattern:  rtsp://viewer:viewer@&lt;sender-pc&gt;:8554/&lt;path&gt;"/>
+        </ToolBar>
+
+        <StatusBar DockPanel.Dock="Bottom" Background="#2D2D30" Foreground="#DDD">
+            <StatusBarItem><TextBlock Text="{Binding ConnectionStatus}"/></StatusBarItem>
+            <Separator/>
+            <StatusBarItem><TextBlock Text="{Binding MediaMtxStatus}"/></StatusBarItem>
+        </StatusBar>
+
+        <DataGrid x:Name="CamGrid"
+                  ItemsSource="{Binding Cameras}"
+                  AutoGenerateColumns="False"
+                  Background="#252526"
+                  Foreground="#DDD"
+                  RowBackground="#252526"
+                  AlternatingRowBackground="#2D2D30"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="#404040"
+                  CanUserAddRows="False" CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column">
+            <DataGrid.Columns>
+                <DataGridTextColumn     Header="Name"     Binding="{Binding Name}"      Width="160"/>
+                <DataGridTextColumn     Header="Path"     Binding="{Binding Path}"      Width="80"/>
+                <DataGridTemplateColumn Header="Mode"                                   Width="230">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox ItemsSource="{x:Static local:Modes.All}"
+                                      SelectedItem="{Binding Mode, Mode=OneWay}"
+                                      SelectionChanged="ModeCombo_SelectionChanged"
+                                      Tag="{Binding}"
+                                      Margin="2"
+                                      Background="#3C3C3C"
+                                      Foreground="#DDD"
+                                      BorderBrush="#555"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridCheckBoxColumn Header="Running"  Binding="{Binding Running}"   Width="60"/>
+                <DataGridCheckBoxColumn Header="Present"  Binding="{Binding Present}"   Width="60"/>
+                <DataGridTextColumn     Header="PID"      Binding="{Binding Pid}"       Width="60"/>
+                <DataGridTextColumn     Header="Re#"      Binding="{Binding Restarts}"  Width="40"/>
+                <DataGridTemplateColumn Header="URL"      Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding FullUrl, Mode=OneWay}"
+                                     IsReadOnly="True"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="#9CDCFE"
+                                     VerticalAlignment="Center"
+                                     Cursor="IBeam"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn     Header="Probe status"
+                                        Binding="{Binding ProbeStatus}"
+                                        Width="180"/>
+                <DataGridTemplateColumn Header="" Width="160">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Probe"   Click="Probe_Click"   Tag="{Binding}"/>
+                                <Button Content="Restart" Click="Restart_Click" Tag="{Binding}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

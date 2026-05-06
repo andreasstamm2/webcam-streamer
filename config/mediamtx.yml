@@ -1,0 +1,48 @@
+# Minimal MediaMTX config for the spike.
+# Only RTSP enabled; everything else disabled for clarity.
+# Auth: single user "viewer" with password "viewer". Change in real use.
+
+logLevel: info
+logDestinations: [stdout]
+
+# RTSP server only
+rtsp: yes
+rtspAddress: :8554
+# TCP-only avoids needing the UDP RTSP port pair (8000/8001 by default).
+# Reduces port conflicts and is fine for our use case (LAN, low cam count).
+rtspTransports: [tcp]
+rtspAuthMethods: [basic]
+
+# MJPEG over RTSP is bursty (~30-50 packets per JPEG frame). Default
+# writeQueueSize (512) overflows quickly when consumers like ffplay are slow
+# to drain the TCP-interleaved socket -- frames get dropped mid-JPEG and
+# the bottom of frames decodes as green. 4096 holds about 2-3 seconds of
+# 720p30 MJPEG at our packet sizes, which is enough to ride out ffplay's
+# stalls.
+writeQueueSize: 4096
+
+# Disable everything else
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+
+# Auth: who can publish (push) and who can read (pull)
+authMethod: internal
+authInternalUsers:
+  # Local publisher — only from 127.0.0.1 (FFmpeg pushing in)
+  - user: publisher
+    pass: publisher
+    ips: [127.0.0.1, ::1]
+    permissions:
+      - action: publish
+  # LAN viewer — anywhere
+  - user: viewer
+    pass: viewer
+    permissions:
+      - action: read
+
+# Paths: empty map = accept any path published to,
+# so FFmpeg can publish to /webcam0 without pre-declaration.
+paths:
+  all_others:
