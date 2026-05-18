@@ -63,6 +63,9 @@ try {
 if (-not (Test-Path "$RepoRoot\supervisor\build\Release\supervisor.exe")) {
     throw "supervisor.exe not produced."
 }
+if (-not (Test-Path "$RepoRoot\supervisor\build\Release\mtx_event_hook.exe")) {
+    throw "mtx_event_hook.exe not produced (Slice B helper exe -- second CMake target)."
+}
 
 # --- 2. Publish WPF UI (self-contained) -------------------------------------
 
