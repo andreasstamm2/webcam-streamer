@@ -82,15 +82,8 @@ actual bugs.
 
 ## Security
 
-This is a LAN-scoped tool. The default basic-auth credentials
-(`viewer:viewer` / `publisher:publisher`) are *not* secure against a
-hostile network — change them in `config/mediamtx.yml` if you expose the
-host beyond a trusted LAN. Do not forward port 8554 to the public
-internet without first switching to strong credentials and considering an
-`rtsps://` proxy in front of MediaMTX.
-
-To report a security issue privately, see [SECURITY.md](SECURITY.md).
-
+This is a LAN-scoped tool. The default digest authentication does not protect against man-in-the-middle-attacks (MITM).
+The RTSP stream is also not encrypted.
 ---
 
 ## License
