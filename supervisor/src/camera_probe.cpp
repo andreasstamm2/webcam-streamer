@@ -55,6 +55,11 @@ std::optional<CameraOverride> LoadOverride(const std::filesystem::path& probesDi
             else if (k == "width")  o.width  = std::stoi(v);
             else if (k == "height") o.height = std::stoi(v);
             else if (k == "fps")    o.fps    = std::stoi(v);
+            else if (k == "enabled") {
+                if      (v == "true")  o.enabled = true;
+                else if (v == "false") o.enabled = false;
+                // any other value: treat as unset (malformed) -- skip silently.
+            }
         } catch (...) { /* skip malformed line */ }
     }
     return o;
@@ -71,18 +76,20 @@ bool SaveOverride(const std::filesystem::path& probesDir,
     // Merge: read existing, overlay update, write back.
     CameraOverride merged;
     if (auto existing = LoadOverride(probesDir, cam_name)) merged = *existing;
-    if (update.mode)   merged.mode   = update.mode;
-    if (update.width)  merged.width  = update.width;
-    if (update.height) merged.height = update.height;
-    if (update.fps)    merged.fps    = update.fps;
+    if (update.mode)    merged.mode    = update.mode;
+    if (update.width)   merged.width   = update.width;
+    if (update.height)  merged.height  = update.height;
+    if (update.fps)     merged.fps     = update.fps;
+    if (update.enabled) merged.enabled = update.enabled;
 
     std::ofstream out(path, std::ios::trunc);
     if (!out) return false;
     out << "camera=" << WideToUtf8(cam_name) << "\n";
-    if (merged.mode)   out << "mode="   << ModeName(*merged.mode) << "\n";
-    if (merged.width)  out << "width="  << *merged.width   << "\n";
-    if (merged.height) out << "height=" << *merged.height  << "\n";
-    if (merged.fps)    out << "fps="    << *merged.fps     << "\n";
+    if (merged.mode)    out << "mode="    << ModeName(*merged.mode) << "\n";
+    if (merged.width)   out << "width="   << *merged.width   << "\n";
+    if (merged.height)  out << "height="  << *merged.height  << "\n";
+    if (merged.fps)     out << "fps="     << *merged.fps     << "\n";
+    if (merged.enabled) out << "enabled=" << (*merged.enabled ? "true" : "false") << "\n";
     return out.good();
 }
 

@@ -12,6 +12,7 @@
 #include "camera_config.h"
 #include "camera_probe.h"
 #include "ipc_server.h"
+#include "settings.h"
 
 #include <windows.h>
 #include <winsock2.h>
@@ -132,8 +133,12 @@ static json CamToJson(const CamSlot& s) {
         {"name",     WideToUtf8(s.cfg.friendly_name)},
         {"path",     WideToUtf8(s.cfg.rtsp_path)},
         {"mode",     ModeName(s.cfg.mode)},
+        {"width",    s.cfg.width},
+        {"height",   s.cfg.height},
+        {"fps",      s.cfg.fps},
         {"running",  s.proc && s.proc->IsRunning()},
         {"present",  s.present},
+        {"enabled",  s.cfg.enabled},
         {"pid",      s.proc ? (uint32_t)s.proc->Pid() : 0},
         {"restarts", s.backoff.restarts},
     };
@@ -179,6 +184,14 @@ int wmain() {
         }
     }
 
+    // Load app-wide settings (default_enabled_for_new_cameras lives here).
+    // The host app owns the file; we just read it. Lives in `root` for now;
+    // the installer will route this to %LOCALAPPDATA%\WebcamStreamer via
+    // SUPERVISOR_ROOT in a later slice.
+    Settings settings = LoadSettings(root);
+    Info("settings: default_enabled_for_new_cameras=" +
+         std::string(settings.default_enabled_for_new_cameras ? "true" : "false"));
+
     Info("enumerating cameras...");
     auto cams = EnumerateCameras(ffExe);
     if (cams.empty()) {
@@ -206,6 +219,13 @@ int wmain() {
             if (ov->height) cc.height = *ov->height;
             if (ov->fps)    cc.fps    = *ov->fps;
         }
+
+        // Enabled flag: override beats settings.json default (which beats
+        // the CameraConfig built-in default of true). A camera with no
+        // override file and no settings.json gets enabled=true (matches
+        // pre-Slice-A behaviour).
+        if (ov && ov->enabled) cc.enabled = *ov->enabled;
+        else                   cc.enabled = settings.default_enabled_for_new_cameras;
     };
 
     std::vector<CameraConfig> camConfigs;
@@ -250,10 +270,21 @@ int wmain() {
                      MakeFFmpegProcessConfig(ffExe, cc, publisher), job);
         slots.push_back(std::move(s));
     }
-    for (auto& s : slots) StartWithBackoff(*s.proc, s.backoff);
+    // Only start the ffmpeg publishers for ENABLED cameras. Disabled cams
+    // keep their SupervisedProcess object (so set-stream-enabled true later
+    // can just Start() it) but never spawn ffmpeg.
+    for (auto& s : slots) {
+        if (s.cfg.enabled) StartWithBackoff(*s.proc, s.backoff);
+        else               Info("cam '" + WideToUtf8(s.cfg.friendly_name) +
+                                "' is disabled; not publishing.");
+    }
 
     Info("supervisor running. Streams:");
     for (auto& s : slots) {
+        if (!s.cfg.enabled) {
+            Info("  (disabled) " + WideToUtf8(s.cfg.friendly_name));
+            continue;
+        }
         Info("  rtsp://viewer:viewer@<host>:8554" + WideToUtf8(s.cfg.rtsp_path) +
              "  (" + WideToUtf8(s.cfg.friendly_name) + ", mode=" + ModeName(s.cfg.mode) + ")");
     }
@@ -411,6 +442,70 @@ int wmain() {
                     rs.ok = true;
                     rs.result = {{"started", true}};
                 }
+            } else if (m == "set-stream-enabled") {
+                std::string nm = rq.params.value("name", std::string{});
+                if (nm.empty() || !rq.params.contains("enabled") ||
+                    !rq.params["enabled"].is_boolean()) {
+                    rs.ok = false;
+                    rs.error = "params {name: string, enabled: bool} required";
+                } else {
+                    auto wname = Utf8ToWide(nm);
+                    auto it = std::find_if(slots.begin(), slots.end(),
+                        [&](const CamSlot& cs) { return cs.cfg.friendly_name == wname; });
+                    if (it == slots.end()) {
+                        rs.ok = false; rs.error = "unknown camera: " + nm;
+                    } else {
+                        auto& s = *it;
+                        bool want = rq.params["enabled"].get<bool>();
+                        // Persist first so a crash between persistence and
+                        // process change leaves a consistent state on disk.
+                        CameraOverride upd;
+                        upd.enabled = want;
+                        SaveOverride(probesDir, wname, upd);
+                        s.cfg.enabled = want;
+
+                        if (want) {
+                            // Re-enable: build a fresh SupervisedProcess (the
+                            // previous one may carry exit state). Skip the
+                            // start if the camera is currently unplugged --
+                            // the supervision loop's hot-plug path will start
+                            // it when it returns.
+                            if (s.present) {
+                                s.proc->Stop();
+                                rebuildSlot(s);
+                                StartWithBackoff(*s.proc, s.backoff);
+                            }
+                        } else {
+                            // Disable: kill the publisher. Keep the
+                            // SupervisedProcess object around so subsequent
+                            // re-enable can rebuild from a known state.
+                            s.proc->Stop();
+                        }
+
+                        ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                        s.last_running = s.proc->IsRunning();
+
+                        rs.ok = true;
+                        rs.result = {
+                            {"name",    nm},
+                            {"enabled", want},
+                        };
+                    }
+                }
+            } else if (m == "reload-settings") {
+                // Re-read settings.json and re-broadcast as a settings event
+                // so future hot-plug uses the new default. Existing cams
+                // keep their current `enabled` -- this method does NOT
+                // retroactively change cams' state.
+                Settings fresh = LoadSettings(root);
+                settings = fresh;
+                Info("settings reloaded: default_enabled_for_new_cameras=" +
+                     std::string(settings.default_enabled_for_new_cameras ? "true" : "false"));
+                rs.ok = true;
+                rs.result = {
+                    {"default_enabled_for_new_cameras",
+                     settings.default_enabled_for_new_cameras},
+                };
             } else if (m == "shutdown") {
                 g_stop.store(true);
                 rs.ok = true;
@@ -462,7 +557,11 @@ int wmain() {
             }
 
             for (auto& s : slots) {
-                if (!s.present) {
+                if (!s.present || !s.cfg.enabled) {
+                    // Disabled or unplugged: ensure ffmpeg is dead and
+                    // do not auto-restart. last_running is kept in sync so
+                    // the next transition (re-enable or re-plug) fires a
+                    // state-change event.
                     if (s.last_running) {
                         s.last_running = false;
                         ipc.PublishEvent("camera-state-changed", CamToJson(s));
@@ -510,8 +609,12 @@ int wmain() {
                 } else if (!s.present && isPresent) {
                     Info("camera reappeared: " + WideToUtf8(s.cfg.friendly_name));
                     s.present = true;
-                    rebuildSlot(s);
-                    StartWithBackoff(*s.proc, s.backoff);
+                    if (s.cfg.enabled) {
+                        rebuildSlot(s);
+                        StartWithBackoff(*s.proc, s.backoff);
+                    } else {
+                        Info("  (kept disabled per user setting)");
+                    }
                     listChanged = true;
                 }
             }
@@ -526,11 +629,14 @@ int wmain() {
                 Info("camera added: " + WideToUtf8(name) + " -> path " +
                      WideToUtf8(s.cfg.rtsp_path) + " mode=" + ModeName(s.cfg.mode) +
                      " " + std::to_string(s.cfg.width) + "x" + std::to_string(s.cfg.height) +
-                     "@" + std::to_string(s.cfg.fps));
+                     "@" + std::to_string(s.cfg.fps) +
+                     " enabled=" + (s.cfg.enabled ? "true" : "false"));
                 s.proc = std::make_unique<SupervisedProcess>(
                              MakeFFmpegProcessConfig(ffExe, s.cfg, publisher), job);
                 slots.push_back(std::move(s));
-                StartWithBackoff(*slots.back().proc, slots.back().backoff);
+                if (s.cfg.enabled) {
+                    StartWithBackoff(*slots.back().proc, slots.back().backoff);
+                }
                 listChanged = true;
             }
 

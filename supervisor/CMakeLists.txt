@@ -20,6 +20,7 @@ add_executable(supervisor
     src/camera_config.cpp
     src/camera_probe.cpp
     src/ipc_server.cpp
+    src/settings.cpp
 )
 target_include_directories(supervisor PRIVATE src third_party)
 target_compile_definitions(supervisor PRIVATE

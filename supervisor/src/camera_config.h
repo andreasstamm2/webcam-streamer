@@ -27,7 +27,12 @@ struct CameraConfig {
     // frame -> green bottom. 15fps halves the bandwidth and tracks well.
     // For H.264 transcode, ffplay can handle 30fps fine -- we keep 15 for
     // consistency and because 15fps is plenty for monitoring.
-    int          fps = 15;
+    int          fps = 30;
+    // Whether the supervisor should spawn an ffmpeg publisher for this cam.
+    // Independent of Mode: Mode is "what shape of ffmpeg args"; enabled is
+    // "do we run ffmpeg at all". A cam publishes iff `present && enabled`.
+    // Source priority: override file > settings.json default > true.
+    bool         enabled = true;
 };
 
 // Build the FFmpeg argv for one camera publishing into MediaMTX.

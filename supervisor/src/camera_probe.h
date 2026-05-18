@@ -29,6 +29,11 @@ struct CameraOverride {
     std::optional<int>  width;
     std::optional<int>  height;
     std::optional<int>  fps;
+    // Whether the supervisor should publish this camera at all. Missing key
+    // in the override file = "no explicit user intent recorded" -- the
+    // caller (main.cpp::resolveCameraConfig) then falls back to settings.json
+    // (`default_enabled_for_new_cameras`). Persisted as `enabled=true|false`.
+    std::optional<bool> enabled;
 };
 
 // Read full override (mode + optional resolution + optional fps).
