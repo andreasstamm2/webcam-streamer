@@ -28,7 +28,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root        = Split-Path -Parent $PSScriptRoot
 $supervisor  = Join-Path $root 'supervisor\build\Release\supervisor.exe'
-$uiExe       = Join-Path $root 'ui\WebcamStreamerUi\bin\Release\net9.0-windows\WebcamStreamerUi.exe'
+$uiExe       = Join-Path $root 'ui\WebcamStreamerUi\bin\Release\net9.0-windows10.0.19041.0\WebcamStreamerUi.exe'
 $ff          = Join-Path $root 'third_party\ffmpeg\ffmpeg.exe'
 
 if (-not (Test-Path $supervisor)) { throw "supervisor.exe not built: $supervisor" }
@@ -132,6 +132,7 @@ function Read-Next {
     if ($null -eq $line) { return $null }
     return @{ raw = $line; obj = ($line | ConvertFrom-Json) }
 }
+$script:capturedEvents = New-Object 'System.Collections.ArrayList'
 function Wait-Response {
     param([int]$Id, [int]$TimeoutMs = $IpcTimeoutMs)
     $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
@@ -140,7 +141,23 @@ function Wait-Response {
         $msg = Read-Next -TimeoutMs $rem
         if (-not $msg) { continue }
         if ($msg.obj.type -eq 'resp' -and $msg.obj.id -eq $Id) { return $msg.obj }
-        # events ignored in this script
+        if ($msg.obj.type -eq 'event') { [void]$script:capturedEvents.Add($msg.obj) }
+    }
+    return $null
+}
+function Wait-EventName {
+    param([string]$Name, [int]$TimeoutMs = 10000)
+    # First scan any events we've already buffered while waiting on other responses.
+    foreach ($ev in $script:capturedEvents) { if ($ev.name -eq $Name) { return $ev } }
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        $rem = [int][math]::Max(50, ($deadline - (Get-Date)).TotalMilliseconds)
+        $msg = Read-Next -TimeoutMs $rem
+        if (-not $msg) { continue }
+        if ($msg.obj.type -eq 'event') {
+            [void]$script:capturedEvents.Add($msg.obj)
+            if ($msg.obj.name -eq $Name) { return $msg.obj }
+        }
     }
     return $null
 }
@@ -197,6 +214,60 @@ Start-Sleep -Seconds 2
 $r = Test-Pull -Path $cam.path -Tag "postrestart" -Sec $StreamPullSec
 if ($r.frames -ge $MinFramesPerStream) { Pass "stream resumes after restart ($($r.frames) frames)" }
 else                                    { Fail "stream broken after restart (only $($r.frames) frames)" }
+
+Phase 'A6a' 'set-stream-enabled round trip (Slice A)'
+$ssResp = Invoke-Ipc -Id 30 -Method 'set-stream-enabled' -Params @{name=$cam.name; enabled=$false}
+if ($ssResp.ok -and $ssResp.result.enabled -eq $false) { Pass "set-stream-enabled enabled=false" }
+else { Fail "set-stream-enabled disable rejected: $($ssResp.error)" }
+Start-Sleep -Seconds 2
+$listAfter = Invoke-Ipc -Id 31 -Method 'list-cameras'
+$row = $listAfter.result | Where-Object { $_.name -eq $cam.name }
+if ($row.enabled -eq $false -and $row.running -eq $false) { Pass "list-cameras shows enabled=false running=false" }
+else { Fail "list-cameras still shows enabled=$($row.enabled) running=$($row.running)" }
+$reResp = Invoke-Ipc -Id 32 -Method 'set-stream-enabled' -Params @{name=$cam.name; enabled=$true}
+if ($reResp.ok -and $reResp.result.enabled -eq $true) { Pass "set-stream-enabled re-enable" }
+else { Fail "set-stream-enabled re-enable rejected" }
+Start-Sleep -Seconds 3
+# Clean up override file the round-trip wrote so it doesn't pollute other runs.
+$overridePathA6 = Join-Path $root "probes\$slug.override.txt"
+if (Test-Path $overridePathA6) { Remove-Item $overridePathA6 -Force }
+
+Phase 'A6b' 'viewer-connected fires when ffmpeg reads (Slice B)'
+$script:capturedEvents.Clear()
+$readerProc = Start-Process -FilePath $ff -ArgumentList @(
+    '-loglevel','quiet','-rtsp_transport','tcp',
+    '-i',"rtsp://viewer:viewer@127.0.0.1:8554$($cam.path)",
+    '-t','3','-f','null','NUL'
+) -PassThru -WindowStyle Hidden
+$vc = Wait-EventName -Name 'viewer-connected' -TimeoutMs 15000
+if ($vc) {
+    $haveCam   = $null -ne $vc.data.camera   -and $vc.data.camera   -ne ''
+    $haveCodec = $null -ne $vc.data.codec    -and $vc.data.codec    -ne ''
+    if ($haveCam -and $haveCodec) { Pass "viewer-connected: camera='$($vc.data.camera)' codec='$($vc.data.codec)'" }
+    else { Fail "viewer-connected missing fields: $($vc | ConvertTo-Json -Compress -Depth 4)" }
+} else {
+    Fail "viewer-connected not received in 15s"
+}
+$vd = Wait-EventName -Name 'viewer-disconnected' -TimeoutMs 15000
+if ($vd) { Pass "viewer-disconnected fired" } else { Fail "viewer-disconnected not received" }
+for ($i=0; $i -lt 30 -and -not $readerProc.HasExited; $i++) { Start-Sleep -Milliseconds 200 }
+if (-not $readerProc.HasExited) { Stop-Process -Id $readerProc.Id -Force -EA 0 }
+
+Phase 'A6c' 'viewer-auth-failed fires on bad credentials (Slice C)'
+$script:capturedEvents.Clear()
+$badReader = Start-Process -FilePath $ff -ArgumentList @(
+    '-loglevel','quiet','-rtsp_transport','tcp',
+    '-i',"rtsp://viewer:WRONGPASSWORD@127.0.0.1:8554$($cam.path)",
+    '-t','1','-f','null','NUL'
+) -PassThru -WindowStyle Hidden
+$af = Wait-EventName -Name 'viewer-auth-failed' -TimeoutMs 15000
+if ($af -and $af.data.reader_ip -and $af.data.reason) {
+    Pass "viewer-auth-failed: reader_ip='$($af.data.reader_ip)' reason='$($af.data.reason)'"
+} else {
+    Fail "viewer-auth-failed not received or missing fields"
+}
+for ($i=0; $i -lt 30 -and -not $badReader.HasExited; $i++) { Start-Sleep -Milliseconds 200 }
+if (-not $badReader.HasExited) { Stop-Process -Id $badReader.Id -Force -EA 0 }
 
 Phase 'A6' 'shutdown via IPC + verify supervisor + children die'
 $shResp = Invoke-Ipc -Id 99 -Method 'shutdown'
