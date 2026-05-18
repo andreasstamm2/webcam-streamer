@@ -43,27 +43,24 @@ from anywhere on the LAN.
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Sender["Sender PC (Windows 11)"]
-        UI["WebcamStreamerUi.exe<br/>(WPF)"]
-        SUP["supervisor.exe<br/>(C++, owns Job Object)"]
-        MTX["mediamtx.exe<br/>RTSP :8554"]
-        FF0["ffmpeg.exe (cam 0)"]
-        FF1["ffmpeg.exe (cam 1)"]
-
-        UI -- "named pipe<br/>ND-JSON" --> SUP
-        SUP -.spawns.-> MTX
-        SUP -.spawns.-> FF0
-        SUP -.spawns.-> FF1
-        FF0 -- "rtsp://localhost:8554/webcam0" --> MTX
-        FF1 -- "rtsp://localhost:8554/webcam1" --> MTX
+graph RL
+    %% Nodes
+    Cam[📷 Webcam]
+    
+    subgraph PC [Windows PC]
+        App[💻 Webcam-Streamer App]
     end
+    
+    Client[📺 Network Client <br> e.g., VLC, OBS, Browser]
 
-    subgraph Receiver["Any LAN client"]
-        CLI["VLC / ffplay / WebEye / OBS"]
-    end
+    %% Connections
+    Cam -->|USB <br> Raw Stream| App
+    App -->|Ethernet / Wi-Fi <br> RTSP Stream| Client
 
-    MTX -- "rtsp://user:pass@sender:8554/webcamN" --> CLI
+    %% Styling
+    style Cam fill:#f9f,stroke:#333,stroke-width:2px
+    style App fill:#bbf,stroke:#333,stroke-width:2px
+    style Client fill:#bfb,stroke:#333,stroke-width:2px
 ```
 
 - **WPF UI** is just a presentation layer over the supervisor. It can be
