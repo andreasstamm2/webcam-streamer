@@ -11,7 +11,7 @@ param([int]$BootSec = 8)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$uiExe = Join-Path $root 'ui\WebcamStreamerUi\bin\Release\net9.0-windows\WebcamStreamerUi.exe'
+$uiExe = Join-Path $root 'ui\WebcamStreamerUi\bin\Release\net9.0-windows10.0.19041.0\WebcamStreamerUi.exe'
 if (-not (Test-Path $uiExe)) { throw "WebcamStreamerUi.exe not built: $uiExe" }
 
 # 0. cleanup

@@ -2,10 +2,29 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- Target a specific Windows 10 SDK so we can call WinRT toast APIs
+         from this unpackaged WPF app. CommunityToolkit.WinUI.Notifications
+         requires 17763.0 or later; we pick 19041.0 (Win10 2004 / Win11) so
+         all toast features are available. -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- Enables System.Windows.Forms.NotifyIcon inside this WPF app. -->
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Archived but stable wrapper over the Windows toast XML APIs.
+         Microsoft has stopped maintaining this and points new code at the
+         Windows App SDK's AppNotificationManager, but for an unpackaged
+         WPF app the toolkit is dramatically lighter (no WindowsAppSDK
+         runtime to bundle). We hide it behind ToastNotifier so a future
+         swap is local. -->
+    <!-- Both this package and the renamed CommunityToolkit.WinUI.Notifications
+         ship the same archived code under the Microsoft.Toolkit.Uwp.Notifications
+         namespace. We pin to the original name so the namespace stays stable. -->
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
+  </ItemGroup>
 
 </Project>

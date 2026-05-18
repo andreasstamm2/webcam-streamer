@@ -2,8 +2,15 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:WebcamStreamerUi"
-             StartupUri="MainWindow.xaml">
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+        ShutdownMode=OnExplicitShutdown is critical: the app is tray-by-default,
+        so closing the WPF main window must not terminate the process. Only
+        the tray menu's "Exit" (Application.Current.Shutdown) actually quits.
+        StartupUri is intentionally absent; App.OnStartup() decides what to
+        show (typically nothing; the tray icon is the persistent surface).
+    -->
     <Application.Resources>
-         
+
     </Application.Resources>
 </Application>
