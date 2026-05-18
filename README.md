@@ -1,6 +1,6 @@
 # webcam-streamer
 
-> Turn any webcam on your Windows PC into a RTSP streams and use any RTSP client on your network to watch.
+Turn any webcam on your Windows PC into a RTSP streams and use any RTSP client on your network to watch.
 
 `webcam_streamer` is a small Windows desktop app that can publish every USB
 webcam attached to the PC as an RTSP stream (`rtsp://<HOST>:8554/webcam0`,
