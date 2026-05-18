@@ -1,12 +1,10 @@
 # webcam_streamer
 
-> Turn the USB webcams on a Windows PC into RTSP streams that any client on
-> your LAN can watch.
+> Turn any webcam on your Windows PC into a RTSP streams and use any RTSP client on your network to watch.
 
-`webcam_streamer` is a small Windows desktop app that publishes every USB
-webcam attached to the PC as an RTSP stream (`rtsp://host:8554/webcam0`,
-`/webcam1`, ...). Point VLC, ffplay, the WebEye .NET control, OBS, or any
-other RTSP client at the URL and you get live video.
+`webcam_streamer` is a small Windows desktop app that can publish every USB
+webcam attached to the PC as an RTSP stream (`rtsp://<HOST>:8554/webcam0`,
+`/webcam1`, ...). Point VLC OR any other RTSP client at the URL and you get live video.
 
 It is designed for monitoring use cases: leave a PC sitting next to some
 hardware, plug in one or more webcams, start the app, and watch the cams
@@ -17,19 +15,10 @@ from anywhere on the LAN.
 ## Features
 
 - **Plug-and-play**: cameras are auto-detected on startup and on hot-plug.
-- **Auto codec selection**: each camera is probed once and the best working
-  pipeline is picked (MJPEG passthrough / H.264 transcode / etc.) — works
-  around the surprising number of cams that violate RFC 2435 or have buggy
-  MJPEG packetisation.
-- **Per-camera overrides**: change mode, resolution, or framerate from the
+- **codec**: H.264
+- **Per-camera overrides**: change resolution or framerate from the
   UI; settings persist across restarts.
-- **Crash-safe**: a C++ supervisor owns FFmpeg + MediaMTX as child
-  processes inside a Windows Job Object. Close the UI and every child
-  process is killed cleanly — no orphaned `ffmpeg.exe` eating CPU.
-- **Trusted-LAN out of the box**: RTSP basic auth enabled by default
-  (`viewer:viewer` for read, `publisher:publisher` for write).
-- **No audio, no recording**: monitoring is the only use case; the
-  pipeline stays simple.
+- **Security**: RTSP digest auth used with random username + password
 
 ---
 
