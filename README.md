@@ -1,4 +1,4 @@
-# webcam_streamer
+# webcam-streamer
 
 > Turn any webcam on your Windows PC into a RTSP streams and use any RTSP client on your network to watch.
 
