@@ -9,45 +9,95 @@ namespace ws {
 
 namespace {
 
-// Read until '\n'. Returns empty string on disconnect/error.
-// Buffered: a 4 KB chunk per ReadFile syscall instead of one byte at a time
-// (large IPC payloads like list-advertised-formats can be tens of KB).
-// State is per-connection-call; the AcceptLoop only ever has one ReadLine
-// in flight, so a function-local buffer is wrong -- we need state across
-// calls within the same connection. Done via a small reader struct.
+// Wrap an OVERLAPPED with an auto-reset event for blocking-with-cancel reads.
+// Necessary because we need to ReadFile on the IPC pipe from one thread
+// while a different thread (e.g. an events-pipe handler) calls WriteFile on
+// the same handle. With NON-overlapped I/O, the Windows kernel serialises
+// these two via an internal per-handle mutex -- concurrent WriteFile blocks
+// until ReadFile completes, which can be never. FILE_FLAG_OVERLAPPED lifts
+// the serialisation so independent read and write are allowed in parallel.
+struct ReadOverlapped {
+    OVERLAPPED ov{};
+    ReadOverlapped() {
+        ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr); // manual reset
+    }
+    ~ReadOverlapped() {
+        if (ov.hEvent) CloseHandle(ov.hEvent);
+    }
+};
+
+// Read one '\n'-terminated line from an overlapped-mode named pipe handle.
+// Returns empty on disconnect / error / stop. Buffered.
 class LineReader {
 public:
-    explicit LineReader(HANDLE pipe) : pipe_(pipe) {}
+    LineReader(HANDLE pipe, std::atomic<bool>& stop) : pipe_(pipe), stop_(stop) {}
 
-    // Returns next line (without trailing CR/LF). Empty on disconnect or error.
     std::string Next() {
         std::string line;
         for (;;) {
-            // Refill buffer if drained.
             if (pos_ >= len_) {
+                ReadOverlapped ro;
                 DWORD n = 0;
-                BOOL ok = ReadFile(pipe_, buf_, (DWORD)sizeof(buf_), &n, nullptr);
-                if (!ok || n == 0) return {};
+                BOOL ok = ReadFile(pipe_, buf_, (DWORD)sizeof(buf_), &n, &ro.ov);
+                if (!ok) {
+                    DWORD err = GetLastError();
+                    if (err != ERROR_IO_PENDING) return {};   // disconnect / error
+                    // Wait for the read to complete, but poll stop_ so Stop()
+                    // can cancel us via CancelIoEx.
+                    while (true) {
+                        DWORD w = WaitForSingleObject(ro.ov.hEvent, 200);
+                        if (w == WAIT_OBJECT_0) break;
+                        if (stop_.load()) {
+                            CancelIoEx(pipe_, &ro.ov);
+                            return {};
+                        }
+                    }
+                    if (!GetOverlappedResult(pipe_, &ro.ov, &n, FALSE) || n == 0) {
+                        return {};
+                    }
+                } else if (n == 0) {
+                    return {};
+                }
                 len_ = (size_t)n;
                 pos_ = 0;
             }
-            // Scan up to next '\n' within the buffer.
             while (pos_ < len_) {
                 char c = buf_[pos_++];
                 if (c == '\n') return line;
                 if (c == '\r') continue;
                 line.push_back(c);
-                if (line.size() > 256 * 1024) return {};   // sanity guard
+                if (line.size() > 256 * 1024) return {};   // sanity
             }
         }
     }
 
 private:
-    HANDLE pipe_;
-    char   buf_[4096]{};
-    size_t pos_ = 0;
-    size_t len_ = 0;
+    HANDLE             pipe_;
+    std::atomic<bool>& stop_;
+    char               buf_[4096]{};
+    size_t             pos_ = 0;
+    size_t             len_ = 0;
 };
+
+// Write all bytes via overlapped WriteFile. Returns true on success.
+bool OverlappedWriteAll(HANDLE pipe, const std::string& bytes) {
+    OVERLAPPED ov{};
+    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ov.hEvent) return false;
+    bool ok_all = false;
+    DWORD nw = 0;
+    BOOL ok = WriteFile(pipe, bytes.data(), (DWORD)bytes.size(), &nw, &ov);
+    if (ok) {
+        ok_all = (nw == bytes.size());
+    } else if (GetLastError() == ERROR_IO_PENDING) {
+        // Wait without a stop check -- writes are short, bounded by buffer.
+        if (GetOverlappedResult(pipe, &ov, &nw, TRUE)) {
+            ok_all = (nw == bytes.size());
+        }
+    }
+    CloseHandle(ov.hEvent);
+    return ok_all;
+}
 
 }  // namespace
 
@@ -94,9 +144,7 @@ bool IpcServer::WritePipe(const std::string& bytes) {
         if (!client_connected_ || pipe_ == INVALID_HANDLE_VALUE) return false;
         p = pipe_;
     }
-    DWORD nw = 0;
-    return WriteFile(p, bytes.data(), (DWORD)bytes.size(), &nw, nullptr) &&
-           nw == bytes.size();
+    return OverlappedWriteAll(p, bytes);
 }
 
 void IpcServer::PublishEvent(std::string_view name, const nlohmann::json& data) {
@@ -114,7 +162,7 @@ void IpcServer::AcceptLoop() {
     while (!stop_.load()) {
         HANDLE p = CreateNamedPipeW(
             pipe_name_.c_str(),
-            PIPE_ACCESS_DUPLEX,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,                          // single concurrent instance
             64 * 1024, 64 * 1024,       // out/in buffer sizes
@@ -133,8 +181,30 @@ void IpcServer::AcceptLoop() {
         }
 
         Info("ipc: waiting for client on " + WideToUtf8(pipe_name_));
-        BOOL connected = ConnectNamedPipe(p, nullptr) ? TRUE :
-                         (GetLastError() == ERROR_PIPE_CONNECTED);
+        // Overlapped ConnectNamedPipe: returns FALSE / ERROR_IO_PENDING and
+        // completes asynchronously via the OVERLAPPED.hEvent. We poll stop_
+        // every 200ms so Stop() can cancel an idle accept cleanly.
+        OVERLAPPED connOv{};
+        connOv.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        BOOL connected = FALSE;
+        BOOL ret = ConnectNamedPipe(p, &connOv);
+        if (ret) {
+            connected = TRUE;
+        } else {
+            DWORD err = GetLastError();
+            if (err == ERROR_PIPE_CONNECTED) {
+                connected = TRUE;
+            } else if (err == ERROR_IO_PENDING) {
+                while (true) {
+                    DWORD w = WaitForSingleObject(connOv.hEvent, 200);
+                    if (w == WAIT_OBJECT_0) { connected = TRUE; break; }
+                    if (stop_.load()) { CancelIoEx(p, &connOv); break; }
+                }
+            } else {
+                Warn("ipc: ConnectNamedPipe failed err=" + std::to_string(err));
+            }
+        }
+        CloseHandle(connOv.hEvent);
         if (stop_.load()) {
             std::lock_guard<std::mutex> g(pipe_mutex_);
             if (pipe_ != INVALID_HANDLE_VALUE) {
@@ -160,7 +230,7 @@ void IpcServer::AcceptLoop() {
 
         // Per-connection request loop. LineReader keeps its 4 KB buffer
         // alive across requests on the same connection.
-        LineReader reader(p);
+        LineReader reader(p, stop_);
         while (!stop_.load()) {
             std::string line = reader.Next();
             if (line.empty()) break;  // disconnect or error

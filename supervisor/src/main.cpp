@@ -13,6 +13,7 @@
 #include "camera_probe.h"
 #include "ipc_server.h"
 #include "settings.h"
+#include "events_pipe.h"
 
 #include <windows.h>
 #include <winsock2.h>
@@ -24,6 +25,8 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <memory>
 #include <set>
@@ -184,6 +187,67 @@ int wmain() {
         }
     }
 
+    // Locate mtx_event_hook.exe -- bundled next to supervisor.exe by both
+    // the CMake build and the Inno installer. Generate a runtime mediamtx
+    // config that substitutes the absolute hook path into the
+    // runOnRead / runOnUnread template. MediaMTX runs the substituted file;
+    // the template under config/ stays portable.
+    fs::path hookExe;
+    {
+        wchar_t selfBuf[MAX_PATH];
+        GetModuleFileNameW(nullptr, selfBuf, MAX_PATH);
+        hookExe = fs::path(selfBuf).parent_path() / "mtx_event_hook.exe";
+    }
+    if (!fs::exists(hookExe)) {
+        Error("missing required file: " + hookExe.string() +
+              " (build the mtx_event_hook CMake target)");
+        return 2;
+    }
+
+    fs::path runtimeMtxYml = root / "mediamtx.runtime.yml";
+    {
+        std::ifstream tin(mtxYml);
+        if (!tin) {
+            Error("could not read template " + mtxYml.string());
+            return 2;
+        }
+        std::stringstream tbuf;
+        tbuf << tin.rdbuf();
+        std::string contents = tbuf.str();
+        // Substitute placeholder. YAML wraps the path in double quotes; we
+        // escape backslashes for the YAML double-quoted-scalar rule.
+        std::string hookStr = hookExe.string();
+        std::string escaped;
+        escaped.reserve(hookStr.size() * 2);
+        for (char c : hookStr) {
+            if (c == '\\' || c == '"') escaped.push_back('\\');
+            escaped.push_back(c);
+        }
+        // The YAML uses single-quoted strings around an inner double-quoted
+        // path -- ' "C:\path\to\hook.exe" read '. Inside single quotes, YAML
+        // is literal, so we ONLY need to escape the inner double-quoted
+        // content for MediaMTX's command-line parsing (which we already do
+        // by quoting the path). No YAML escape needed inside single quotes.
+        // -> drop the escaping pass; just use the raw path. The template
+        // uses '"__EVENT_HOOK__" read' (single-quoted YAML, inner double
+        // quotes around the path so spaces work in the path).
+        (void)escaped;
+        size_t pos = 0;
+        const std::string placeholder = "__EVENT_HOOK__";
+        while ((pos = contents.find(placeholder, pos)) != std::string::npos) {
+            contents.replace(pos, placeholder.size(), hookStr);
+            pos += hookStr.size();
+        }
+        std::ofstream tout(runtimeMtxYml, std::ios::trunc);
+        if (!tout) {
+            Error("could not write runtime config " + runtimeMtxYml.string());
+            return 2;
+        }
+        tout << contents;
+    }
+    Info("event hook: " + hookExe.string());
+    Info("runtime mediamtx config: " + runtimeMtxYml.string());
+
     // Load app-wide settings (default_enabled_for_new_cameras lives here).
     // The host app owns the file; we just read it. Lives in `root` for now;
     // the installer will route this to %LOCALAPPDATA%\WebcamStreamer via
@@ -246,7 +310,7 @@ int wmain() {
 
     ProcessConfig mtxCfg{
         .exe_path      = mtxExe.wstring(),
-        .args          = { mtxYml.wstring() },
+        .args          = { runtimeMtxYml.wstring() },   // substituted template
         .friendly_name = L"mediamtx",
     };
     auto mtx = std::make_unique<SupervisedProcess>(mtxCfg, job);
@@ -518,6 +582,70 @@ int wmain() {
         });
     ipc.Start();
     Info("ipc: serving on \\\\.\\pipe\\webcam-streamer-supervisor");
+
+    // ----- Events pipe: mtx_event_hook.exe -> us -----
+    // For each hook invocation, look up the path -> CamSlot, derive a friendly
+    // payload (camera name, codec, resolution), and republish on the control
+    // pipe as a `viewer-connected` / `viewer-disconnected` event.
+    auto codecForMode = [](Mode m) -> const char* {
+        switch (m) {
+            case Mode::PassthroughH264:
+            case Mode::TranscodeMjpegToH264:
+            case Mode::TranscodeRawToH264:
+                return "H.264";
+            case Mode::PassthroughMjpeg:
+            case Mode::TranscodeRawToMjpeg:
+                return "MJPEG";
+            default:
+                return "unknown";
+        }
+    };
+
+    EventsPipeServer events(L"\\\\.\\pipe\\webcam-streamer-events",
+        [&](const nlohmann::json& msg) {
+            std::string ev_type   = msg.value("event",       std::string{});
+            std::string mtx_path  = msg.value("path",        std::string{});
+            std::string reader_ip = msg.value("reader_ip",   std::string{});
+            std::string user      = msg.value("reader_user", std::string{});
+
+            json out;
+            out["path"]        = "/" + mtx_path;
+            out["reader_ip"]   = reader_ip;
+            out["reader_user"] = user;
+            std::wstring wpath = Utf8ToWide(mtx_path);
+            {
+                std::lock_guard<std::mutex> g(state_mutex);
+                auto it = std::find_if(slots.begin(), slots.end(),
+                    [&](const CamSlot& s) {
+                        std::wstring w = s.cfg.rtsp_path;
+                        if (!w.empty() && w.front() == L'/') w.erase(0, 1);
+                        return w == wpath;
+                    });
+                if (it != slots.end()) {
+                    out["camera"]     = WideToUtf8(it->cfg.friendly_name);
+                    out["mode"]       = ModeName(it->cfg.mode);
+                    out["codec"]      = codecForMode(it->cfg.mode);
+                    out["width"]      = it->cfg.width;
+                    out["height"]     = it->cfg.height;
+                } else {
+                    out["camera"]     = mtx_path;
+                    out["mode"]       = "unknown";
+                    out["codec"]      = "unknown";
+                }
+            }
+            const char* name = (ev_type == "read") ? "viewer-connected"
+                              : (ev_type == "unread") ? "viewer-disconnected"
+                              : nullptr;
+            if (!name) {
+                Warn("events-pipe: unknown event type '" + ev_type + "'");
+                return;
+            }
+            ipc.PublishEvent(name, out);
+            Info(std::string(name) + ": cam='" + out.value("camera", std::string{}) +
+                 "' reader=" + reader_ip);
+        });
+    events.Start();
+
     Info("Ctrl-C to stop.");
 
     // ----- supervision loop -----
@@ -646,6 +774,7 @@ int wmain() {
 
     Info("stopping ipc...");
     ipc.Stop();
+    events.Stop();
     Info("stopping children...");
     for (auto& s : slots) s.proc->Stop();
     mtx->Stop();

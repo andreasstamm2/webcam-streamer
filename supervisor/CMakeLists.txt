@@ -21,9 +21,21 @@ add_executable(supervisor
     src/camera_probe.cpp
     src/ipc_server.cpp
     src/settings.cpp
+    src/events_pipe.cpp
 )
 target_include_directories(supervisor PRIVATE src third_party)
 target_compile_definitions(supervisor PRIVATE
+    UNICODE _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+)
+
+# Helper exe invoked by MediaMTX's runOnRead / runOnUnread hooks. Tiny --
+# one TU, no deps beyond kernel32.
+add_executable(mtx_event_hook
+    src/mtx_event_hook.cpp
+)
+target_compile_definitions(mtx_event_hook PRIVATE
     UNICODE _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX

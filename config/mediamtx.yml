@@ -11,7 +11,13 @@ rtspAddress: :8554
 # TCP-only avoids needing the UDP RTSP port pair (8000/8001 by default).
 # Reduces port conflicts and is fine for our use case (LAN, low cam count).
 rtspTransports: [tcp]
-rtspAuthMethods: [basic]
+rtspAuthMethods: [digest]
+# Digest auth: server sends a nonce, client computes
+#   MD5( MD5(user:realm:pass) : nonce : MD5(method:uri) )
+# and sends the digest. The password itself never appears on the wire in
+# a recoverable form. Video stream remains cleartext (LAN-only deployment).
+# Both ffmpeg/libavformat and VLC negotiate digest automatically when the
+# server advertises it via WWW-Authenticate.
 
 # MJPEG over RTSP is bursty (~30-50 packets per JPEG frame). Default
 # writeQueueSize (512) overflows quickly when consumers like ffplay are slow
@@ -44,5 +50,14 @@ authInternalUsers:
 
 # Paths: empty map = accept any path published to,
 # so FFmpeg can publish to /webcam0 without pre-declaration.
+#
+# runOnRead / runOnUnread fire when a reader (VLC, ffplay, WebEye) successfully
+# authenticates and starts/stops reading a path. The __EVENT_HOOK__ placeholder
+# is substituted at supervisor startup with the absolute path to
+# mtx_event_hook.exe; the supervisor writes the substituted YAML to a
+# runtime temp file and points MediaMTX at that copy (this file stays
+# template-only on disk).
 paths:
   all_others:
+    runOnRead:   '"__EVENT_HOOK__" read'
+    runOnUnread: '"__EVENT_HOOK__" unread'
