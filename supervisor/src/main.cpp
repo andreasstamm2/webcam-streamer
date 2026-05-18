@@ -26,6 +26,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <thread>
 #include <memory>
@@ -308,10 +309,40 @@ int wmain() {
 
     JobObject job;
 
+    // Indirection: the mediamtx stdout scraper needs to publish events on
+    // the IPC pipe, but IpcServer is constructed further down. We capture
+    // `&ipc_ptr` by reference into the scraper lambda; once IpcServer is
+    // built, we set ipc_ptr to point at it. Auth-failure log lines emitted
+    // before that brief window get dropped (no harm; no client is connected
+    // yet anyway).
+    IpcServer* ipc_ptr = nullptr;
+
+    // Regex for MediaMTX 1.18.x digest auth-failure log lines, of the form:
+    //   2026/05/19 01:03:16 INF [RTSP] [conn 127.0.0.1:59328] closed: authentication failed: ...
+    // Pinned to this version line via setup-deps.ps1's MediaMTX bundle.
+    // If MediaMTX changes wording in a future release, the regex stops
+    // matching -- visibility loss is the failure mode, not a crash.
+    std::regex authFailRe(
+        R"(\[RTSP\] \[conn ([^:\]]+):\d+\] closed: authentication failed)");
+
     ProcessConfig mtxCfg{
         .exe_path      = mtxExe.wstring(),
         .args          = { runtimeMtxYml.wstring() },   // substituted template
         .friendly_name = L"mediamtx",
+        .on_stdout_line = [&ipc_ptr, authFailRe](const std::string& line) {
+            // Always forward to our log so mediamtx output stays visible.
+            Info(std::string("[mtx] ") + line);
+            // Match auth-failure shape and emit a structured IPC event so
+            // the host app can raise a toast. Best-effort: drops if ipc
+            // isn't up yet.
+            std::smatch m;
+            if (ipc_ptr && std::regex_search(line, m, authFailRe)) {
+                nlohmann::json out;
+                out["reader_ip"] = m.str(1);
+                out["reason"]    = "authentication failed";
+                ipc_ptr->PublishEvent("viewer-auth-failed", out);
+            }
+        },
     };
     auto mtx = std::make_unique<SupervisedProcess>(mtxCfg, job);
     Backoff bMtx;
@@ -580,6 +611,7 @@ int wmain() {
             }
             return rs;
         });
+    ipc_ptr = &ipc;   // unblocks the mediamtx-stdout auth-failure publisher
     ipc.Start();
     Info("ipc: serving on \\\\.\\pipe\\webcam-streamer-supervisor");
 
