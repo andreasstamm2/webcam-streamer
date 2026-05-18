@@ -101,6 +101,7 @@ public partial class App : System.Windows.Application
         // --- tray icon ---
         _tray = new TrayIcon(Settings, Vm.Cameras);
         _tray.AdvancedSettingsClicked += (_, _) => ShowMainWindow();
+        _tray.SettingsClicked         += (_, _) => ShowSettingsWindow();
         _tray.NotificationsToggled    += async (_, on) =>
         {
             Settings.NotificationsEnabled = on;
@@ -192,6 +193,16 @@ public partial class App : System.Windows.Application
         if (_mainWindow.WindowState == WindowState.Minimized)
             _mainWindow.WindowState = WindowState.Normal;
         _mainWindow.Activate();
+    }
+
+    public void ShowSettingsWindow()
+    {
+        var w = new SettingsWindow { Owner = _mainWindow };
+        w.ShowDialog();
+        // After the dialog closes the settings may have changed; mirror
+        // the Notifications toggle back to the tray (the tray's menu item
+        // is the other authoritative source).
+        _tray?.SyncNotificationToggle(Settings.NotificationsEnabled);
     }
 
     private void ExitApp()
