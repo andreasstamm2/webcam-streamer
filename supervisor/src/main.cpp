@@ -147,8 +147,13 @@ static void StartNoSleep(SupervisedProcess& p, Backoff& b) {
     }
 }
 
-// Build the JSON description of one camera slot. Caller must hold state_mutex.
-static json CamToJson(const CamSlot& s) {
+// Build the JSON description of one camera slot. Caller must hold
+// state_mutex. The current viewer credentials are passed separately
+// (they're global settings, not per-slot) so the WPF can render each row's
+// rtsp://user:pass@host/path URL without a second IPC call.
+static json CamToJson(const CamSlot& s,
+                       const std::string& viewer_user,
+                       const std::string& viewer_pass) {
     json formats = json::array();
     for (const auto& f : s.formats) {
         formats.push_back({
@@ -175,9 +180,21 @@ static json CamToJson(const CamSlot& s) {
         {"restarts", s.backoff.restarts},
         {"viewer_count", s.viewer_count},
         {"advertised_formats", formats},
-        {"alt_name", WideToUtf8(s.alt_name)},
-        {"vid_pid",  s.vid_pid},
+        {"alt_name",    WideToUtf8(s.alt_name)},
+        {"vid_pid",     s.vid_pid},
+        {"viewer_user", viewer_user},
+        {"viewer_pass", viewer_pass},
     };
+}
+
+// All camera slots as a JSON array (used by list-cameras, get-status, and
+// the cameras-changed event payload). Caller must hold state_mutex.
+static json AllCamsJson(const std::vector<CamSlot>& slots,
+                         const std::string& viewer_user,
+                         const std::string& viewer_pass) {
+    json arr = json::array();
+    for (const auto& s : slots) arr.push_back(CamToJson(s, viewer_user, viewer_pass));
+    return arr;
 }
 
 // Pick a (mode, width, height) tuple that the camera actually advertises.
@@ -249,14 +266,6 @@ static DefaultPick PickDefaultFromFormats(const std::vector<AdvertisedFormat>& f
     return d;
 }
 
-// All camera slots as a JSON array (used by list-cameras, get-status, and
-// the cameras-changed event payload). Caller must hold state_mutex.
-static json AllCamsJson(const std::vector<CamSlot>& slots) {
-    json arr = json::array();
-    for (const auto& s : slots) arr.push_back(CamToJson(s));
-    return arr;
-}
-
 // Build the ffmpeg-publisher ProcessConfig for one camera. Pure helper -- no
 // state. Centralises the publisher-name and arg-building for all three
 // creation sites (initial setup, set-mode/restart-camera rebuild, hot-add
@@ -306,57 +315,63 @@ int wmain() {
         return 2;
     }
 
+    // Load app-wide settings first so we have the viewer credentials to
+    // substitute into the runtime mediamtx.yml. The installer writes these
+    // on post-install; for installs that predate the credentials feature
+    // (or any local-build scenario without an installer step), we
+    // generate them here and persist back so subsequent restarts are
+    // stable.
+    Settings settings = LoadSettings(root);
+    if (settings.viewer_user.empty() || settings.viewer_pass.empty()) {
+        if (settings.viewer_user.empty()) settings.viewer_user = GenerateRandomCredential();
+        if (settings.viewer_pass.empty()) settings.viewer_pass = GenerateRandomCredential();
+        Info("viewer credentials not present in settings.json; generated "
+             "new ones and persisting.");
+        if (!SaveSettings(root, settings)) {
+            Warn("could not persist generated viewer credentials -- they "
+                 "will be regenerated on next startup.");
+        }
+    }
+    Info("settings: default_enabled_for_new_cameras=" +
+         std::string(settings.default_enabled_for_new_cameras ? "true" : "false") +
+         ", viewer_user='" + settings.viewer_user + "'");
+
+    // Generate the runtime mediamtx.yml: the template has placeholders for
+    // the event-hook path and the viewer credentials; substitute and
+    // write. MediaMTX is launched with the runtime file, not the template
+    // (so the template stays portable and the runtime file is regenerated
+    // on each supervisor start AND on set-viewer-credentials).
     fs::path runtimeMtxYml = root / "mediamtx.runtime.yml";
-    {
+    auto writeRuntimeYml = [&]() -> bool {
         std::ifstream tin(mtxYml);
         if (!tin) {
             Error("could not read template " + mtxYml.string());
-            return 2;
+            return false;
         }
         std::stringstream tbuf;
         tbuf << tin.rdbuf();
         std::string contents = tbuf.str();
-        // Substitute placeholder. YAML wraps the path in double quotes; we
-        // escape backslashes for the YAML double-quoted-scalar rule.
-        std::string hookStr = hookExe.string();
-        std::string escaped;
-        escaped.reserve(hookStr.size() * 2);
-        for (char c : hookStr) {
-            if (c == '\\' || c == '"') escaped.push_back('\\');
-            escaped.push_back(c);
-        }
-        // The YAML uses single-quoted strings around an inner double-quoted
-        // path -- ' "C:\path\to\hook.exe" read '. Inside single quotes, YAML
-        // is literal, so we ONLY need to escape the inner double-quoted
-        // content for MediaMTX's command-line parsing (which we already do
-        // by quoting the path). No YAML escape needed inside single quotes.
-        // -> drop the escaping pass; just use the raw path. The template
-        // uses '"__EVENT_HOOK__" read' (single-quoted YAML, inner double
-        // quotes around the path so spaces work in the path).
-        (void)escaped;
-        size_t pos = 0;
-        const std::string placeholder = "__EVENT_HOOK__";
-        while ((pos = contents.find(placeholder, pos)) != std::string::npos) {
-            contents.replace(pos, placeholder.size(), hookStr);
-            pos += hookStr.size();
-        }
+        auto replaceAll = [&](const std::string& placeholder, const std::string& value) {
+            size_t pos = 0;
+            while ((pos = contents.find(placeholder, pos)) != std::string::npos) {
+                contents.replace(pos, placeholder.size(), value);
+                pos += value.size();
+            }
+        };
+        replaceAll("__EVENT_HOOK__",   hookExe.string());
+        replaceAll("__VIEWER_USER__",  settings.viewer_user);
+        replaceAll("__VIEWER_PASS__",  settings.viewer_pass);
         std::ofstream tout(runtimeMtxYml, std::ios::trunc);
         if (!tout) {
             Error("could not write runtime config " + runtimeMtxYml.string());
-            return 2;
+            return false;
         }
         tout << contents;
-    }
+        return true;
+    };
+    if (!writeRuntimeYml()) return 2;
     Info("event hook: " + hookExe.string());
     Info("runtime mediamtx config: " + runtimeMtxYml.string());
-
-    // Load app-wide settings (default_enabled_for_new_cameras lives here).
-    // The host app owns the file; we just read it. Lives in `root` for now;
-    // the installer will route this to %LOCALAPPDATA%\WebcamStreamer via
-    // SUPERVISOR_ROOT in a later slice.
-    Settings settings = LoadSettings(root);
-    Info("settings: default_enabled_for_new_cameras=" +
-         std::string(settings.default_enabled_for_new_cameras ? "true" : "false"));
 
     // Bundled DB of known-good profiles by USB vid:pid. Missing file =
     // empty DB; the fallback path (advertised-format smart pick) still
@@ -410,6 +425,18 @@ int wmain() {
                     : (known ? known->height : smart.height);
         cc.fps    = (ov && ov->fps)    ? *ov->fps
                     : (known ? known->fps    : smart.fps);
+
+        // v0.3: the WPF Mode dropdown exposes only transcode_mjpeg_to_h264
+        // and transcode_raw_to_h264. If an old override or DB entry resolved
+        // to one of the legacy modes (passthrough_*, transcode_raw_to_mjpeg),
+        // silently coerce it -- otherwise the row's combobox would show
+        // blank and the user couldn't edit it.
+        if (cc.mode != Mode::TranscodeMjpegToH264 &&
+            cc.mode != Mode::TranscodeRawToH264) {
+            Info("cam '" + WideToUtf8(name) + "' had legacy mode " +
+                 ModeName(cc.mode) + "; coercing to transcode_mjpeg_to_h264");
+            cc.mode = Mode::TranscodeMjpegToH264;
+        }
 
         if (known) {
             Info("cam '" + WideToUtf8(name) + "' matched known-cameras DB entry '" +
@@ -551,7 +578,7 @@ int wmain() {
 
             if (m == "list-cameras") {
                 rs.ok = true;
-                rs.result = AllCamsJson(slots);
+                rs.result = AllCamsJson(slots, settings.viewer_user, settings.viewer_pass);
             } else if (m == "get-status") {
                 rs.ok = true;
                 rs.result = {
@@ -560,7 +587,7 @@ int wmain() {
                         {"pid",     (uint32_t)mtx->Pid()},
                         {"restarts", bMtx.restarts},
                     }},
-                    {"cameras", AllCamsJson(slots)},
+                    {"cameras", AllCamsJson(slots, settings.viewer_user, settings.viewer_pass)},
                 };
             } else if (m == "restart-camera") {
                 std::string nm = rq.params.value("name", std::string{});
@@ -578,7 +605,7 @@ int wmain() {
                             // The main loop won't observe the down/up flap
                             // since this handler runs synchronously, so emit
                             // the event ourselves to keep clients in sync.
-                            ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                            ipc.PublishEvent("camera-state-changed", CamToJson(s, settings.viewer_user, settings.viewer_pass));
                             s.last_running = s.proc->IsRunning();
                             break;
                         }
@@ -621,7 +648,7 @@ int wmain() {
                         s.proc->Stop();
                         rebuildSlot(s);
                         StartNoSleep(*s.proc, s.backoff);
-                        ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                        ipc.PublishEvent("camera-state-changed", CamToJson(s, settings.viewer_user, settings.viewer_pass));
                         s.last_running = s.proc->IsRunning();
                         // Echo effective values so the client sees what's actually running.
                         rs.ok = true;
@@ -728,13 +755,56 @@ int wmain() {
                             s.proc->Stop();
                         }
 
-                        ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                        ipc.PublishEvent("camera-state-changed", CamToJson(s, settings.viewer_user, settings.viewer_pass));
                         s.last_running = s.proc->IsRunning();
 
                         rs.ok = true;
                         rs.result = {
                             {"name",    nm},
                             {"enabled", want},
+                        };
+                    }
+                }
+            } else if (m == "set-viewer-credentials") {
+                // Update the rtsp viewer username/password. Persists to
+                // settings.json, regenerates mediamtx.runtime.yml, then
+                // restarts MediaMTX so the new credentials take effect.
+                // Any currently-connected reader will be kicked and has
+                // to re-auth with the new credentials.
+                std::string user = rq.params.value("user", std::string{});
+                std::string pass = rq.params.value("pass", std::string{});
+                if (user.empty() || pass.empty()) {
+                    rs.ok = false;
+                    rs.error = "params {user, pass} required and non-empty";
+                } else {
+                    settings.viewer_user = user;
+                    settings.viewer_pass = pass;
+                    if (!SaveSettings(root, settings)) {
+                        rs.ok = false;
+                        rs.error = "could not persist settings.json";
+                    } else if (!writeRuntimeYml()) {
+                        rs.ok = false;
+                        rs.error = "could not write mediamtx.runtime.yml";
+                    } else {
+                        // Restart MediaMTX so it re-reads the new creds.
+                        // The supervision loop's earliest_next gate would
+                        // delay this; we're explicitly user-initiated, so
+                        // bypass by calling StartNoSleep directly after a
+                        // stop. The publishers reconnect once MediaMTX is
+                        // back up.
+                        mtx->Stop();
+                        StartNoSleep(*mtx, bMtx);
+                        WaitForRtspReady(8554, 10s);
+                        ipc.PublishEvent("mediamtx-state-changed",
+                                         json{{"running", mtx->IsRunning()}});
+                        ipc.PublishEvent("cameras-changed",
+                            AllCamsJson(slots, settings.viewer_user, settings.viewer_pass));
+                        Info("viewer credentials updated; mediamtx restarted "
+                             "(viewer_user='" + settings.viewer_user + "')");
+                        rs.ok = true;
+                        rs.result = {
+                            {"user", settings.viewer_user},
+                            {"pass", settings.viewer_pass},
                         };
                     }
                 }
@@ -825,7 +895,7 @@ int wmain() {
                     out["height"]     = it->cfg.height;
                     if (ev_type == "read") it->viewer_count++;
                     else if (ev_type == "unread" && it->viewer_count > 0) it->viewer_count--;
-                    stateEvent     = CamToJson(*it);
+                    stateEvent     = CamToJson(*it, settings.viewer_user, settings.viewer_pass);
                     haveStateEvent = true;
                 } else {
                     out["camera"]     = mtx_path;
@@ -891,7 +961,7 @@ int wmain() {
                     if (s.last_running || s.viewer_count != 0) {
                         s.last_running = false;
                         s.viewer_count = 0;
-                        ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                        ipc.PublishEvent("camera-state-changed", CamToJson(s, settings.viewer_user, settings.viewer_pass));
                     }
                     continue;
                 }
@@ -913,7 +983,7 @@ int wmain() {
                     running_now = s.proc->IsRunning();
                 }
                 if (running_now != s.last_running) {
-                    ipc.PublishEvent("camera-state-changed", CamToJson(s));
+                    ipc.PublishEvent("camera-state-changed", CamToJson(s, settings.viewer_user, settings.viewer_pass));
                     s.last_running = running_now;
                 }
             }
@@ -1009,7 +1079,7 @@ int wmain() {
                     listChanged = true;
                 }
 
-                if (listChanged) ipc.PublishEvent("cameras-changed", AllCamsJson(slots));
+                if (listChanged) ipc.PublishEvent("cameras-changed", AllCamsJson(slots, settings.viewer_user, settings.viewer_pass));
             }
         }
     }

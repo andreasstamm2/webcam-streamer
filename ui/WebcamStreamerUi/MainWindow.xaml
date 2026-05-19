@@ -86,36 +86,157 @@
     </Window.Resources>
 
     <DockPanel>
-        <!-- Top bar -->
+        <!-- Top bar. About moved to the tray menu so it's not duplicated;
+             LAN URL pattern text removed (each row already shows the
+             real URL with a Copy button). -->
         <Border DockPanel.Dock="Top"
                 Background="{StaticResource bgChrome}"
                 BorderBrush="{StaticResource border}" BorderThickness="0,0,0,1"
                 Padding="14,10">
-            <DockPanel>
-                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-                    <TextBlock Text="Webcam Streamer"
-                               FontSize="15" FontWeight="SemiBold"
-                               VerticalAlignment="Center"
-                               Margin="0,0,18,0"/>
-                    <Button Content="About"               Click="About_Click"/>
-                </StackPanel>
-                <TextBlock VerticalAlignment="Center"
-                           HorizontalAlignment="Right"
-                           Foreground="{StaticResource textMuted}"
-                           FontFamily="Consolas, Cascadia Mono, monospace" FontSize="12"
-                           Text="LAN URL pattern:  rtsp://viewer:viewer@&lt;sender-pc&gt;:8554/&lt;path&gt;"/>
-            </DockPanel>
+            <TextBlock Text="Webcam Streamer"
+                       FontSize="15" FontWeight="SemiBold"
+                       VerticalAlignment="Center"/>
         </Border>
 
-        <!-- Status bar -->
+        <!-- Settings panel above the camera grid. Currently hosts a Security
+             section (viewer credentials); Phase 3 will add a second
+             collapsible section for notifications / autostart / default-
+             enabled. The Security section is open by default so a fresh
+             user immediately sees the generated password they need to give
+             to LAN viewers. -->
+        <Border DockPanel.Dock="Top"
+                Background="{StaticResource bgPanel}"
+                BorderBrush="{StaticResource border}" BorderThickness="0,0,0,1"
+                Padding="14,10">
+            <StackPanel>
+                <Expander Header="Security" IsExpanded="True">
+                    <Grid Margin="0,10,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="220"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="220"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Username:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox   Grid.Column="1" x:Name="SecUserBox"
+                                   Text="{Binding ViewerUser, UpdateSourceTrigger=PropertyChanged}"
+                                   Padding="6,4" VerticalContentAlignment="Center"
+                                   FontFamily="Consolas, Cascadia Mono, monospace" FontSize="13"/>
+                        <TextBlock Grid.Column="3" Text="Password:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <local:RevealingPasswordBox Grid.Column="4" x:Name="SecPassBox"
+                                                    Password="{Binding ViewerPassword, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                        <Button Grid.Column="6" Content="Apply"
+                                Click="ApplyCredentials_Click"
+                                MinWidth="80"
+                                VerticalAlignment="Center"
+                                ToolTip="Apply new credentials. Connected viewers will be disconnected and must re-auth."/>
+                    </Grid>
+                </Expander>
+
+                <!-- Settings section. Mirrors the (now-retired) standalone
+                     SettingsWindow dialog. Each checkbox live-applies on
+                     change; no Save button. Settings_Changed_Inline both
+                     persists settings.json and (for autostart) writes the
+                     HKCU\...\Run entry. Collapsed by default to keep the
+                     window compact; Security is the daily-use surface. -->
+                <Expander Header="Settings" IsExpanded="False" Margin="0,10,0,0">
+                    <StackPanel Margin="0,10,0,4">
+                        <CheckBox x:Name="OptNotifications"
+                                  Margin="0,0,0,8"
+                                  Checked="Settings_Changed_Inline"
+                                  Unchecked="Settings_Changed_Inline">
+                            <CheckBox.Content>
+                                <StackPanel>
+                                    <TextBlock Text="Show notifications" FontSize="14"/>
+                                    <TextBlock Text="Pop a tray toast when a viewer connects, or when an authentication attempt fails."
+                                               Foreground="{StaticResource textMuted}" FontSize="12" TextWrapping="Wrap"
+                                               Margin="0,2,0,0" MaxWidth="540"/>
+                                </StackPanel>
+                            </CheckBox.Content>
+                        </CheckBox>
+                        <CheckBox x:Name="OptAutostart"
+                                  Margin="0,0,0,8"
+                                  Checked="Settings_Changed_Inline"
+                                  Unchecked="Settings_Changed_Inline">
+                            <CheckBox.Content>
+                                <StackPanel>
+                                    <TextBlock Text="Start automatically when I log in" FontSize="14"/>
+                                    <TextBlock Text="Adds a per-user registry entry (HKCU\...\Run). Streaming starts shortly after you sign in to Windows."
+                                               Foreground="{StaticResource textMuted}" FontSize="12" TextWrapping="Wrap"
+                                               Margin="0,2,0,0" MaxWidth="540"/>
+                                </StackPanel>
+                            </CheckBox.Content>
+                        </CheckBox>
+                        <CheckBox x:Name="OptStreamByDefault"
+                                  Margin="0,0,0,4"
+                                  Checked="Settings_Changed_Inline"
+                                  Unchecked="Settings_Changed_Inline">
+                            <CheckBox.Content>
+                                <StackPanel>
+                                    <TextBlock Text="Stream newly-detected cameras by default" FontSize="14"/>
+                                    <TextBlock Text="When a new USB camera is plugged in, automatically start publishing it. Untick if you'd rather opt-in per camera from the tray menu."
+                                               Foreground="{StaticResource textMuted}" FontSize="12" TextWrapping="Wrap"
+                                               Margin="0,2,0,0" MaxWidth="540"/>
+                                </StackPanel>
+                            </CheckBox.Content>
+                        </CheckBox>
+                    </StackPanel>
+                </Expander>
+            </StackPanel>
+        </Border>
+
+        <!-- Status bar. Quiet in the happy path: just a coloured dot next
+             to "mediamtx" indicates whether the RTSP server is up. Only
+             surfaces a red error message if something goes wrong with the
+             supervisor/IPC. -->
         <Border DockPanel.Dock="Bottom"
                 Background="{StaticResource bgStatus}"
                 BorderBrush="{StaticResource border}" BorderThickness="0,1,0,0"
                 Padding="14,7">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="{Binding ConnectionStatus}" Foreground="{StaticResource textPrimary}"/>
-                <TextBlock Text=" • " Margin="10,0" Foreground="{StaticResource textMuted}"/>
-                <TextBlock Text="{Binding MediaMtxStatus}"   Foreground="{StaticResource textPrimary}"/>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- green/red dot -->
+                <Ellipse Width="10" Height="10" Margin="0,0,6,0" VerticalAlignment="Center">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="#EF4444"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MediaMtxRunning}" Value="True">
+                                    <Setter Property="Fill" Value="#10B981"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
+                <TextBlock Foreground="{StaticResource textPrimary}" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="mediamtx: down"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MediaMtxRunning}" Value="True">
+                                    <Setter Property="Text" Value="mediamtx: running"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <!-- Error message: visible only when something went wrong. -->
+                <TextBlock Text="{Binding ConnectionStatus}" Margin="14,0,0,0"
+                           Foreground="#B91C1C" FontWeight="SemiBold"
+                           VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ConnectionError}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
         </Border>
 
@@ -179,12 +300,14 @@
             </DataGrid.Resources>
 
             <DataGrid.Columns>
-                <!-- Camera friendly name -->
+                <!-- Camera friendly name. Extra left padding so the cam
+                     title doesn't sit flush against the row edge. -->
                 <DataGridTextColumn Header="Camera" Binding="{Binding Name}" Width="200">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">
                             <Setter Property="FontWeight" Value="SemiBold"/>
                             <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="Padding" Value="8,0,0,0"/>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
@@ -200,12 +323,19 @@
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
 
-                <!-- Mode dropdown - wide enough for the longest mode name -->
-                <DataGridTemplateColumn Header="Mode" Width="245">
+                <!-- Mode dropdown. Friendly display strings ("transcode
+                     MJPEG->H.264") map to the supervisor's wire values
+                     ("transcode_mjpeg_to_h264"). Only the two transcode
+                     modes are exposed; legacy passthrough/raw-to-mjpeg are
+                     hidden in the UI and silently coerced on the
+                     supervisor side. -->
+                <DataGridTemplateColumn Header="Mode" Width="220">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <ComboBox ItemsSource="{x:Static local:Modes.All}"
-                                      SelectedItem="{Binding Mode, Mode=OneWay}"
+                                      DisplayMemberPath="Display"
+                                      SelectedValuePath="Value"
+                                      SelectedValue="{Binding Mode, Mode=OneWay}"
                                       SelectionChanged="ModeCombo_SelectionChanged"
                                       Tag="{Binding}"
                                       Margin="6,6"/>
@@ -347,29 +477,9 @@
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
-                <!-- PID -->
-                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="64">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
-                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
-
-                <!-- Restarts (right-aligned) -->
-                <DataGridTextColumn Header="Restarts" Binding="{Binding Restarts}" Width="68">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
-                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="HorizontalAlignment" Value="Right"/>
-                            <Setter Property="Padding" Value="0,0,12,0"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                <!-- PID + Restarts columns intentionally removed in v0.3:
+                     not actionable for end users; the supervisor log still
+                     carries them for diagnostics. -->
 
                 <!-- Full RTSP URL (selectable + one-click copy) -->
                 <DataGridTemplateColumn Header="RTSP URL" Width="*" MinWidth="280">
@@ -382,6 +492,7 @@
                                         Tag="{Binding}"
                                         MinWidth="56"
                                         Margin="6,0,0,0"
+                                        VerticalAlignment="Center"
                                         ToolTip="Copy this RTSP URL to the clipboard"/>
                                 <TextBox Text="{Binding FullUrl, Mode=OneWay}"
                                          IsReadOnly="True" BorderThickness="0"
@@ -399,27 +510,27 @@
                 <!-- Per-row actions. The activate/deactivate button binds
                      to set-stream-enabled; its label flips based on the
                      Enabled flag so a single button covers both directions.
-                     Restart is only meaningful for enabled cams; disabled
-                     ones have no publisher to restart. -->
-                <DataGridTemplateColumn Header="" Width="200">
+                     (A Restart button used to live here; it was rarely
+                     useful in practice. set-mode/set-stream-enabled
+                     already restart the publisher. The Restart_Click
+                     handler is kept dormant so we can wire it back if
+                     somebody asks.) -->
+                <DataGridTemplateColumn Header="" Width="120">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Click="EnableToggle_Click" Tag="{Binding}" MinWidth="92">
-                                    <Button.Style>
-                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                            <Setter Property="Content" Value="Deactivate"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Enabled}" Value="False">
-                                                    <Setter Property="Content" Value="Activate"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
-                                <Button Content="Restart" Click="Restart_Click" Tag="{Binding}"
-                                        IsEnabled="{Binding Enabled}"/>
-                            </StackPanel>
+                            <Button Click="EnableToggle_Click" Tag="{Binding}" MinWidth="92"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Content" Value="Deactivate"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                <Setter Property="Content" Value="Activate"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>

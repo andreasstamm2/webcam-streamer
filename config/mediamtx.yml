@@ -42,9 +42,10 @@ authInternalUsers:
     ips: [127.0.0.1, ::1]
     permissions:
       - action: publish
-  # LAN viewer — anywhere
-  - user: viewer
-    pass: viewer
+  # LAN viewer — credentials substituted at runtime from settings.json.
+  # See main.cpp where __VIEWER_USER__ / __VIEWER_PASS__ get replaced.
+  - user: __VIEWER_USER__
+    pass: __VIEWER_PASS__
     permissions:
       - action: read
 

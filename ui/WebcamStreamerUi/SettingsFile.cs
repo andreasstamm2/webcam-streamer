@@ -9,15 +9,23 @@ namespace WebcamStreamerUi;
 // supervisor picks up the new value for hot-plug decisions.
 public sealed class HostSettings
 {
-    public bool NotificationsEnabled { get; set; } = true;
-    public bool DefaultEnabledForNewCameras { get; set; } = true;
+    public bool   NotificationsEnabled        { get; set; } = true;
+    public bool   DefaultEnabledForNewCameras { get; set; } = true;
+    // MediaMTX viewer credentials. Empty here = not yet generated; the
+    // installer writes them on post-install and the supervisor falls back
+    // to generating them at first run when missing. The WPF Security
+    // section edits these via the set-viewer-credentials IPC method.
+    public string ViewerUser                   { get; set; } = "";
+    public string ViewerPassword               { get; set; } = "";
 
     // Mirror of what the WPF host writes to disk. Fields here MUST match
     // the keys the C++ supervisor's settings.cpp looks for.
     private sealed class Schema
     {
-        public bool? notifications_enabled              { get; set; }
-        public bool? default_enabled_for_new_cameras    { get; set; }
+        public bool?  notifications_enabled              { get; set; }
+        public bool?  default_enabled_for_new_cameras    { get; set; }
+        public string? viewer_user                       { get; set; }
+        public string? viewer_pass                       { get; set; }
     }
 
     public static string DataRoot
@@ -53,6 +61,8 @@ public sealed class HostSettings
             {
                 NotificationsEnabled        = s?.notifications_enabled              ?? true,
                 DefaultEnabledForNewCameras = s?.default_enabled_for_new_cameras    ?? true,
+                ViewerUser                  = s?.viewer_user                        ?? "",
+                ViewerPassword              = s?.viewer_pass                        ?? "",
             };
         }
         catch
@@ -70,6 +80,8 @@ public sealed class HostSettings
         {
             notifications_enabled              = NotificationsEnabled,
             default_enabled_for_new_cameras    = DefaultEnabledForNewCameras,
+            viewer_user                        = ViewerUser,
+            viewer_pass                        = ViewerPassword,
         };
         var json = JsonSerializer.Serialize(schema,
                        new JsonSerializerOptions { WriteIndented = true });

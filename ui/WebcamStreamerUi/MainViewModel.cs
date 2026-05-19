@@ -8,8 +8,13 @@ namespace WebcamStreamerUi;
 
 public sealed class MainViewModel : INotifyPropertyChanged
 {
-    private string _connectionStatus = "disconnected";
-    private string _mediaMtxStatus = "mediamtx: unknown";
+    // ConnectionStatus is shown only on error (the happy "ipc connected"
+    // state was just noise -- if the supervisor is up and IPC is fine,
+    // the rest of the UI is the evidence). On disconnect we surface a
+    // red message so the user knows the camera state may be stale.
+    private string _connectionStatus = "";
+    private bool   _connectionError;
+    private bool   _mediaMtxRunning;
 
     public ObservableCollection<CameraInfo> Cameras { get; } = new();
 
@@ -19,11 +24,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set => Set(ref _connectionStatus, value);
     }
 
-    public string MediaMtxStatus
+    public bool ConnectionError
     {
-        get => _mediaMtxStatus;
-        set => Set(ref _mediaMtxStatus, value);
+        get => _connectionError;
+        set => Set(ref _connectionError, value);
     }
+
+    // Drives a green/red dot next to "mediamtx" in the status bar. PID and
+    // restart counts were dropped from the user-facing status -- they're
+    // implementation detail and not actionable.
+    public bool MediaMtxRunning
+    {
+        get => _mediaMtxRunning;
+        set => Set(ref _mediaMtxRunning, value);
+    }
+
+    // Current viewer credentials, shadowed from whatever the supervisor
+    // reports per-row. Bound to the Security section TextBox + reveal-
+    // on-type password input. Editing here doesn't persist anywhere by
+    // itself; the Security section's Apply button is what calls
+    // set-viewer-credentials.
+    private string _viewerUser = "";
+    private string _viewerPass = "";
+    public string ViewerUser     { get => _viewerUser; set => Set(ref _viewerUser, value); }
+    public string ViewerPassword { get => _viewerPass; set => Set(ref _viewerPass, value); }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -67,14 +91,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             if (!seen.Contains(Cameras[i].Name)) Cameras.RemoveAt(i);
         }
+
+        // Promote viewer credentials from whichever row arrived so the
+        // Security section sees them. They're identical across rows
+        // (global supervisor setting echoed per-row), so the first row
+        // wins.
+        if (Cameras.Count > 0)
+        {
+            var first = Cameras[0];
+            if (!string.IsNullOrEmpty(first.ViewerUser)     && first.ViewerUser     != ViewerUser)     ViewerUser     = first.ViewerUser;
+            if (!string.IsNullOrEmpty(first.ViewerPassword) && first.ViewerPassword != ViewerPassword) ViewerPassword = first.ViewerPassword;
+        }
     }
 
     public void ApplyMediaMtx(JsonElement mediamtx)
     {
-        bool running = mediamtx.TryGetProperty("running", out var r) && r.GetBoolean();
-        uint pid     = mediamtx.TryGetProperty("pid", out var p) ? p.GetUInt32() : 0;
-        int  restarts = mediamtx.TryGetProperty("restarts", out var rs) ? rs.GetInt32() : 0;
-        MediaMtxStatus = $"mediamtx: {(running ? "running" : "down")} (pid {pid}, restarts {restarts})";
+        // Only the running flag matters to the user; pid + restarts are
+        // diagnostic detail surfaced in supervisor.log if needed.
+        MediaMtxRunning = mediamtx.TryGetProperty("running", out var r) && r.GetBoolean();
     }
 
     /// <summary>Apply an incoming camera-state-changed event payload to the matching row.</summary>

@@ -36,6 +36,24 @@ $supervisor  = Join-Path $root 'supervisor\build\Release\supervisor.exe'
 $uiExe       = Join-Path $root 'ui\WebcamStreamerUi\bin\Release\net9.0-windows10.0.19041.0\WebcamStreamerUi.exe'
 $ff          = Join-Path $root 'third_party\ffmpeg\ffmpeg.exe'
 
+# Viewer credentials. The supervisor reads (or generates and writes) these
+# in <root>\settings.json on startup since v0.3. Read them here so the
+# pull tests authenticate against the same values MediaMTX expects.
+# Falls back to the legacy viewer/viewer pair only if the file doesn't
+# exist yet (the first supervisor start will create it).
+function Get-ViewerCreds {
+    $sp = Join-Path $root 'settings.json'
+    if (-not (Test-Path $sp)) { return @{ user = 'viewer'; pass = 'viewer' } }
+    try {
+        $s = Get-Content $sp -Raw | ConvertFrom-Json
+        $u = $s.viewer_user
+        $p = $s.viewer_pass
+        if ([string]::IsNullOrEmpty($u)) { $u = 'viewer' }
+        if ([string]::IsNullOrEmpty($p)) { $p = 'viewer' }
+        return @{ user = $u; pass = $p }
+    } catch { return @{ user = 'viewer'; pass = 'viewer' } }
+}
+
 if (-not (Test-Path $supervisor)) { throw "supervisor.exe not built: $supervisor" }
 if (-not (Test-Path $uiExe))      { throw "UI not built: $uiExe" }
 if (-not (Test-Path $ff))         { throw "ffmpeg not present (run setup-deps.ps1)" }
@@ -53,8 +71,10 @@ function Test-Pull {
     $progress = Join-Path $env:TEMP "e2e-$Tag.progress.log"
     $errLog   = Join-Path $env:TEMP "e2e-$Tag.err.log"
     if (Test-Path $progress) { Remove-Item $progress -Force }
+    $u = $script:viewer.user
+    $p = $script:viewer.pass
     $args = @('-hide_banner','-loglevel','warning','-rtsp_transport','tcp',
-              '-i', "rtsp://viewer:viewer@127.0.0.1:8554$Path",
+              '-i', "rtsp://${u}:${p}@127.0.0.1:8554$Path",
               '-t', "$Sec", '-an', '-f','null','-', '-progress', $progress)
     $p = Start-Process -FilePath $ff -ArgumentList $args -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $env:TEMP "e2e-$Tag.out.log") `
@@ -73,13 +93,15 @@ function Test-Pull {
 function Test-PullParallel {
     param([array]$Cameras, [int]$Sec)
     $jobs = @()
+    $u = $script:viewer.user
+    $vp = $script:viewer.pass
     foreach ($c in $Cameras) {
         $tag = ($c.path -replace '/','')
         $progress = Join-Path $env:TEMP "e2e-par-$tag.progress.log"
         $errLog   = Join-Path $env:TEMP "e2e-par-$tag.err.log"
         if (Test-Path $progress) { Remove-Item $progress -Force }
         $args = @('-hide_banner','-loglevel','warning','-rtsp_transport','tcp',
-                  '-i', "rtsp://viewer:viewer@127.0.0.1:8554$($c.path)",
+                  '-i', "rtsp://${u}:${vp}@127.0.0.1:8554$($c.path)",
                   '-t', "$Sec", '-an', '-f','null','-', '-progress', $progress)
         $p = Start-Process -FilePath $ff -ArgumentList $args -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $env:TEMP "e2e-par-$tag.out.log") `
@@ -117,6 +139,14 @@ $svP = Start-Process -FilePath $supervisor -PassThru -WindowStyle Hidden `
 Start-Sleep -Seconds $BootSec
 if ($svP.HasExited) { Fail "supervisor exited unexpectedly"; exit 1 }
 Pass "supervisor running (PID $($svP.Id))"
+
+# After supervisor has booted, settings.json contains either the
+# installer-generated creds or the supervisor's first-run fallback.
+# Read them into a script-scoped record so every Test-Pull below
+# authenticates with whatever the running mediamtx instance actually
+# expects.
+$script:viewer = Get-ViewerCreds
+Info_ "viewer creds: user='$($script:viewer.user)'"
 
 Phase 'A2' 'connect IPC and enumerate cameras'
 $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', 'webcam-streamer-supervisor',
@@ -248,7 +278,7 @@ Phase 'A6b' 'viewer-connected fires when ffmpeg reads (Slice B)'
 $script:capturedEvents.Clear()
 $readerProc = Start-Process -FilePath $ff -ArgumentList @(
     '-loglevel','quiet','-rtsp_transport','tcp',
-    '-i',"rtsp://viewer:viewer@127.0.0.1:8554$($cam.path)",
+    '-i',"rtsp://$($script:viewer.user):$($script:viewer.pass)@127.0.0.1:8554$($cam.path)",
     '-t','3','-f','null','NUL'
 ) -PassThru -WindowStyle Hidden
 $vc = Wait-EventName -Name 'viewer-connected' -TimeoutMs 15000
@@ -269,7 +299,7 @@ Phase 'A6c' 'viewer-auth-failed fires on bad credentials (Slice C)'
 $script:capturedEvents.Clear()
 $badReader = Start-Process -FilePath $ff -ArgumentList @(
     '-loglevel','quiet','-rtsp_transport','tcp',
-    '-i',"rtsp://viewer:WRONGPASSWORD@127.0.0.1:8554$($cam.path)",
+    '-i',"rtsp://$($script:viewer.user):WRONGPASSWORD_e2etest@127.0.0.1:8554$($cam.path)",
     '-t','1','-f','null','NUL'
 ) -PassThru -WindowStyle Hidden
 $af = Wait-EventName -Name 'viewer-auth-failed' -TimeoutMs 15000

@@ -61,7 +61,10 @@ public partial class App : System.Windows.Application
         Launcher.StdoutLine += (_, line) => Debug.WriteLine("[sup] "    + line);
         Launcher.StderrLine += (_, line) => Debug.WriteLine("[sup-err] " + line);
         Launcher.Exited     += (_, code) => Dispatcher.BeginInvoke(() =>
-            Vm.ConnectionStatus = $"supervisor exited (code {code})");
+        {
+            Vm.ConnectionStatus = $"supervisor exited (code {code})";
+            Vm.ConnectionError  = true;
+        });
 
         try
         {
@@ -78,7 +81,11 @@ public partial class App : System.Windows.Application
         Ipc = new IpcClient();
         Ipc.EventReceived += OnIpcEvent;
         Ipc.Disconnected  += (_, why) =>
-            Dispatcher.BeginInvoke(() => Vm.ConnectionStatus = "ipc disconnected: " + why);
+            Dispatcher.BeginInvoke(() =>
+            {
+                Vm.ConnectionStatus = "supervisor disconnected: " + why;
+                Vm.ConnectionError  = true;
+            });
 
         // Brief retry: supervisor opens its pipe a beat after launch.
         for (int attempt = 0; attempt < 20; attempt++)
@@ -93,7 +100,10 @@ public partial class App : System.Windows.Application
                 return;
             }
         }
-        Vm.ConnectionStatus = "ipc connected";
+        // Drop the happy-path "ipc connected" message -- it's just noise.
+        // The status bar stays empty unless something goes wrong.
+        Vm.ConnectionStatus = "";
+        Vm.ConnectionError  = false;
 
         // Pull initial state so the tray menu has cameras to show.
         await RefreshAsync();
@@ -101,7 +111,11 @@ public partial class App : System.Windows.Application
         // --- tray icon ---
         _tray = new TrayIcon(Settings, Vm.Cameras);
         _tray.AdvancedSettingsClicked += (_, _) => ShowMainWindow();
-        _tray.SettingsClicked         += (_, _) => ShowSettingsWindow();
+        // The standalone Settings dialog was retired in v0.3 -- the same
+        // toggles live in a collapsible section in the main window.
+        // Tray "Settings..." now opens the main window directly so the
+        // user lands on the right surface immediately.
+        _tray.SettingsClicked         += (_, _) => ShowMainWindow();
         _tray.AboutClicked            += (_, _) => ShowAboutWindow();
         _tray.NotificationsToggled    += async (_, on) =>
         {
@@ -149,7 +163,11 @@ public partial class App : System.Windows.Application
                 if (result.TryGetProperty("mediamtx", out var mtx)) Vm.ApplyMediaMtx(mtx);
             }
         }
-        catch (Exception ex) { Vm.ConnectionStatus = "refresh failed: " + ex.Message; }
+        catch (Exception ex)
+        {
+            Vm.ConnectionStatus = "refresh failed: " + ex.Message;
+            Vm.ConnectionError  = true;
+        }
     }
 
     private void OnIpcEvent(object? sender, EventArrived ev)
@@ -198,15 +216,10 @@ public partial class App : System.Windows.Application
         _mainWindow.Activate();
     }
 
-    public void ShowSettingsWindow()
-    {
-        var w = new SettingsWindow { Owner = _mainWindow };
-        w.ShowDialog();
-        // After the dialog closes the settings may have changed; mirror
-        // the Notifications toggle back to the tray (the tray's menu item
-        // is the other authoritative source).
-        _tray?.SyncNotificationToggle(Settings.NotificationsEnabled);
-    }
+    // Public hook so the inline Settings section in MainWindow can keep
+    // the tray menu's Notifications checkbox in sync after a flip.
+    public void SyncTrayNotificationToggle(bool enabled)
+        => _tray?.SyncNotificationToggle(enabled);
 
     // About dialog: read-only, modal. If the MainWindow happens to be
     // open we anchor on it so the dialog centers there; otherwise it

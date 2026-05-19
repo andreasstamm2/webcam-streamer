@@ -198,30 +198,55 @@ Type: files;          Name: "{app}\settings.json"
 Type: files;          Name: "{app}\mediamtx.runtime.yml"
 
 [Code]
+// 8-char credential generator using Inno Setup's Pascal Random. Charset
+// is the RFC 3986 unreserved subset so the value can sit verbatim in a
+// rtsp://user:pass@host URL without percent-encoding. The supervisor
+// also knows how to (re-)generate credentials at first run as a safety
+// net if this file ever arrives without them.
+function GenCredential(Len: Integer): String;
+const
+  Alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~';
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to Len do
+    Result := Result + Copy(Alphabet, Random(Length(Alphabet)) + 1, 1);
+end;
+
 // Write the initial settings.json once installation completes. The
-// streamall task checkbox decides default_enabled_for_new_cameras,
-// per the grilled design (the installer choice persists as the policy
-// for hot-plug too -- ADR 0002).
+// streamall task checkbox decides default_enabled_for_new_cameras (per
+// ADR 0002 the installer choice also drives hot-plug). Viewer creds are
+// generated here on a fresh install; existing settings.json files are
+// preserved so an upgrade keeps the user's chosen password.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   SettingsPath: String;
   Contents:     String;
   StreamAll:    Boolean;
+  ViewerUser:   String;
+  ViewerPass:   String;
 begin
   if CurStep = ssPostInstall then begin
     SettingsPath := ExpandConstant('{app}\settings.json');
+    // Preserve existing file on upgrade (user may have changed creds
+    // post-install via the WPF Security section).
+    if FileExists(SettingsPath) then exit;
+
+    Randomize;   // seed Pascal RNG from current time
     StreamAll    := WizardIsTaskSelected('streamall');
+    ViewerUser   := GenCredential(8);
+    ViewerPass   := GenCredential(8);
     Contents :=
       '{' + #13#10 +
       '  "notifications_enabled": true,' + #13#10 +
       '  "default_enabled_for_new_cameras": ';
     if StreamAll then Contents := Contents + 'true'
     else              Contents := Contents + 'false';
-    Contents := Contents + #13#10 + '}' + #13#10;
-    // onlyifdoesntexist semantics: don't overwrite a user's edited file
-    // on upgrade. The supervisor reads this on each startup.
-    if not FileExists(SettingsPath) then begin
-      SaveStringToFile(SettingsPath, Contents, False);
-    end;
+    Contents := Contents + ',' + #13#10 +
+                '  "viewer_user": "' + ViewerUser + '",' + #13#10 +
+                '  "viewer_pass": "' + ViewerPass + '"' + #13#10 +
+                '}' + #13#10;
+    SaveStringToFile(SettingsPath, Contents, False);
   end;
 end;

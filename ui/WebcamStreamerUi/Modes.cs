@@ -1,17 +1,26 @@
 namespace WebcamStreamerUi;
 
-// Canonical list of modes the supervisor accepts. Keep in sync with
-// supervisor/src/camera_config.cpp (ModeFromString) and probe-camera.ps1.
+// User-facing display ("transcode MJPEG->H.264") + the wire value the
+// supervisor's set-mode IPC expects ("transcode_mjpeg_to_h264"). The two
+// pass-through modes and the raw-to-mjpeg mode are deliberately hidden:
+// they are documented-broken (passthrough on real cams) or pointless
+// (raw_to_mjpeg defeats the purpose of transcoding). The supervisor
+// silently coerces unsupported override-file values to MJPEG->H.264 on
+// load.
+public sealed record ModeOption(string Display, string Value);
+
 public static class Modes
 {
-    public static IReadOnlyList<string> All { get; } = new[]
+    public static IReadOnlyList<ModeOption> All { get; } = new[]
     {
-        "passthrough_mjpeg",
-        "passthrough_h264",
-        "transcode_mjpeg_to_h264",
-        "transcode_raw_to_h264",
-        "transcode_raw_to_mjpeg",
+        new ModeOption("transcode MJPEG->H.264", "transcode_mjpeg_to_h264"),
+        new ModeOption("transcode RAW->H.264",   "transcode_raw_to_h264"),
     };
+
+    // Lookups by either side, for binding the ComboBox SelectedItem to the
+    // CameraInfo.Mode wire string.
+    public static ModeOption? ByValue(string value) =>
+        All.FirstOrDefault(m => m.Value == value);
 }
 
 // Common cam resolutions. Operator picks one; tool sends as set-mode params

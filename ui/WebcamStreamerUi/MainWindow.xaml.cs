@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,6 +15,9 @@ public partial class MainWindow : Window
     private readonly MainViewModel _vm;
     private readonly IpcClient?    _ipc;
     private DispatcherTimer?       _pollTimer;
+    // Suppresses Settings_Changed_Inline re-entry while we initialise the
+    // three checkboxes from disk on window load.
+    private bool                   _settingsLoading;
 
     public MainWindow()
     {
@@ -29,6 +33,12 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        // Populate the inline Settings section checkboxes from the host
+        // settings before the IPC refresh kicks off; the boxes' Checked /
+        // Unchecked handlers persist edits live, so we suppress those
+        // during the initial set.
+        LoadSettingsIntoCheckboxes();
+
         if (_ipc == null) return;
         // Initial pull (in case the user opens the window before the App's
         // first refresh propagated to all bindings).
@@ -40,6 +50,72 @@ public partial class MainWindow : Window
         _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _pollTimer.Tick += async (_, __) => await RefreshAsync();
         _pollTimer.Start();
+    }
+
+    private void LoadSettingsIntoCheckboxes()
+    {
+        _settingsLoading = true;
+        try
+        {
+            var s = App.Instance?.Settings ?? new HostSettings();
+            OptNotifications.IsChecked   = s.NotificationsEnabled;
+            OptAutostart.IsChecked       = AutostartHelper.IsEnabled();
+            OptStreamByDefault.IsChecked = s.DefaultEnabledForNewCameras;
+        }
+        finally { _settingsLoading = false; }
+    }
+
+    private async void Settings_Changed_Inline(object sender, RoutedEventArgs e)
+    {
+        // Mirrors the (retired) standalone SettingsWindow logic: each
+        // checkbox click live-applies. Notifications + default-enabled go
+        // through settings.json + a reload-settings IPC; autostart writes
+        // a HKCU\...\Run entry pointing at the current host exe.
+        if (_settingsLoading) return;
+        var app = App.Instance;
+        if (app == null) return;
+        try
+        {
+            bool notifications = OptNotifications.IsChecked   == true;
+            bool autostart     = OptAutostart.IsChecked       == true;
+            bool defaultEnable = OptStreamByDefault.IsChecked == true;
+
+            if (app.Settings.NotificationsEnabled        != notifications ||
+                app.Settings.DefaultEnabledForNewCameras != defaultEnable)
+            {
+                app.Settings.NotificationsEnabled        = notifications;
+                app.Settings.DefaultEnabledForNewCameras = defaultEnable;
+                app.Settings.Save();
+                if (app.Ipc != null)
+                {
+                    try { await app.Ipc.CallAsync("reload-settings"); }
+                    catch (Exception ex) { Debug.WriteLine("reload-settings: " + ex.Message); }
+                }
+                // The tray's Notifications menu item also tracks this
+                // flag; keep them in sync without having to round-trip
+                // through the dialog.
+                App.Instance?.SyncTrayNotificationToggle(notifications);
+            }
+
+            if (autostart != AutostartHelper.IsEnabled())
+            {
+                if (autostart)
+                {
+                    var exe = Process.GetCurrentProcess().MainModule?.FileName
+                              ?? AppContext.BaseDirectory;
+                    AutostartHelper.Enable(exe);
+                }
+                else
+                {
+                    AutostartHelper.Disable();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Could not save settings:\n" + ex.Message,
+                "Webcam Streamer", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private async Task RefreshAsync()
@@ -60,6 +136,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _vm.ConnectionStatus = "refresh failed: " + ex.Message;
+            _vm.ConnectionError  = true;
         }
     }
 
@@ -82,6 +159,37 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, "restart-camera failed:\n" + ex.Message,
                             "IPC error", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async void ApplyCredentials_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ipc == null) return;
+        var user = _vm.ViewerUser?.Trim() ?? "";
+        var pass = _vm.ViewerPassword ?? "";
+        if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(pass))
+        {
+            MessageBox.Show(this,
+                "Username and password must both be non-empty.",
+                "Webcam Streamer", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        try
+        {
+            // set-viewer-credentials restarts mediamtx server-side, which
+            // briefly kicks any connected viewer. The subsequent
+            // cameras-changed event re-pushes every row (with the new
+            // creds baked into FullUrl).
+            await _ipc.CallAsync("set-viewer-credentials",
+                                 new { user, pass },
+                                 timeoutMs: 15000);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                "Could not apply new credentials:\n" + ex.Message,
+                "IPC error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await RefreshAsync();
         }
     }
 
@@ -161,7 +269,10 @@ public partial class MainWindow : Window
         if (sender is not ComboBox { Tag: CameraInfo cam } cb) return;
         if (_ipc == null) return;
         if (e.AddedItems.Count == 0) return;
-        var picked = e.AddedItems[0] as string;
+        // The combo now binds to ModeOption records (Display + Value); the
+        // wire payload still uses the Value side, so the supervisor's
+        // set-mode handler doesn't need to change.
+        var picked = (e.AddedItems[0] as ModeOption)?.Value;
         if (string.IsNullOrEmpty(picked)) return;
         if (picked == cam.Mode) return;
 

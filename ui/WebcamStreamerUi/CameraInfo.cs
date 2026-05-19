@@ -29,6 +29,8 @@ public sealed class CameraInfo : INotifyPropertyChanged
     private uint   _pid;
     private int    _restarts;
     private int    _viewerCount;
+    private string _viewerUser = "";
+    private string _viewerPass = "";
     private List<AdvertisedFormat> _advertisedFormats = new();
 
     public string Name        { get => _name;        set => Set(ref _name,        value); }
@@ -44,6 +46,12 @@ public sealed class CameraInfo : INotifyPropertyChanged
     public uint   Pid         { get => _pid;         set => Set(ref _pid,         value); }
     public int    Restarts    { get => _restarts;    set => Set(ref _restarts,    value); }
     public int    ViewerCount { get => _viewerCount; set => Set(ref _viewerCount, value); }
+    // Current viewer credentials echoed by the supervisor (global config,
+    // sent per-row for ease of binding to FullUrl). Updating these makes
+    // FullUrl recompute, so the per-row "Copy" button always reflects the
+    // currently-applied password.
+    public string ViewerUser     { get => _viewerUser; set => Set(ref _viewerUser, value); }
+    public string ViewerPassword { get => _viewerPass; set => Set(ref _viewerPass, value); }
 
     // All formats this cam advertises via DirectShow, as reported by the
     // supervisor's `ffmpeg -list_options` at discovery time. Drives the
@@ -93,7 +101,20 @@ public sealed class CameraInfo : INotifyPropertyChanged
         }
     }
 
-    public string FullUrl => $"rtsp://viewer:viewer@127.0.0.1:8554{_path}";
+    // Per-row RTSP URL with current viewer credentials baked in. User and
+    // password are URL-encoded so any character a user might pick (after
+    // editing the generated value in the Security section) stays
+    // syntactically valid. If creds haven't arrived yet (initial race),
+    // fall back to placeholder so the UI doesn't show ":@host".
+    public string FullUrl
+    {
+        get
+        {
+            string u = string.IsNullOrEmpty(_viewerUser) ? "viewer" : Uri.EscapeDataString(_viewerUser);
+            string p = string.IsNullOrEmpty(_viewerPass) ? "viewer" : Uri.EscapeDataString(_viewerPass);
+            return $"rtsp://{u}:{p}@127.0.0.1:8554{_path}";
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -102,11 +123,13 @@ public sealed class CameraInfo : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
-        if (prop == nameof(Path))        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
-        if (prop == nameof(ViewerCount)) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasViewers)));
+        if (prop == nameof(Path))           PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
+        if (prop == nameof(ViewerUser))     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
+        if (prop == nameof(ViewerPassword)) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
+        if (prop == nameof(ViewerCount))    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasViewers)));
         // Changing the Mode changes which advertised formats are eligible
         // for the Resolution dropdown -- re-raise so the combo refreshes.
-        if (prop == nameof(Mode))        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableResolutions)));
+        if (prop == nameof(Mode))           PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableResolutions)));
         return true;
     }
 
@@ -123,7 +146,9 @@ public sealed class CameraInfo : INotifyPropertyChanged
         if (el.TryGetProperty("enabled",      out var en)) Enabled     = en.GetBoolean();
         if (el.TryGetProperty("pid",          out var pi)) Pid         = pi.GetUInt32();
         if (el.TryGetProperty("restarts",     out var rs)) Restarts    = rs.GetInt32();
-        if (el.TryGetProperty("viewer_count", out var vc)) ViewerCount = vc.GetInt32();
+        if (el.TryGetProperty("viewer_count", out var vc)) ViewerCount    = vc.GetInt32();
+        if (el.TryGetProperty("viewer_user", out var vu))  ViewerUser     = vu.GetString() ?? "";
+        if (el.TryGetProperty("viewer_pass", out var vp))  ViewerPassword = vp.GetString() ?? "";
         if (el.TryGetProperty("advertised_formats", out var af) && af.ValueKind == JsonValueKind.Array)
         {
             var parsed = new List<AdvertisedFormat>(af.GetArrayLength());
