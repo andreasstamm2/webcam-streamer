@@ -52,6 +52,12 @@ function Get-FFmpeg {
     $bin = Get-ChildItem -Path $extractTmp -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
     if (-not $bin) { throw "ffmpeg.exe not found inside archive" }
     $srcBin = $bin.Directory.FullName
+    # $ffDir must exist as a directory BEFORE the pipe-copy below — otherwise
+    # PowerShell treats it as a single destination filename, the first piped
+    # FileInfo gets copied to that name, subsequent items overwrite it, and
+    # ffmpeg.exe never lands at $ffDir\ffmpeg.exe. Locally the dir survives
+    # from a prior run; on CI (clean checkout) it doesn't.
+    New-Item -ItemType Directory -Force -Path $ffDir | Out-Null
     Get-ChildItem -Path $srcBin | Copy-Item -Destination $ffDir -Force
     if (-not (Test-Path $ffExe)) { throw "ffmpeg.exe not present after copy" }
     Write-Host "[ffmpeg] OK: $(& $ffExe -version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
