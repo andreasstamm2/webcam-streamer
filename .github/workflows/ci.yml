@@ -1,0 +1,58 @@
+name: CI
+
+# Build + static-verify on every push and PR. The hardware-dependent
+# verify scripts (verify-stream-enable.ps1, verify-viewer-events.ps1,
+# verify-auth-fail.ps1, verify-end-to-end.ps1) require a real USB camera
+# enumerable via DirectShow and are not run on GitHub-hosted runners.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Fetch third-party binaries
+        shell: pwsh
+        run: .\scripts\setup-deps.ps1
+
+      - name: Build supervisor + helper exe
+        shell: pwsh
+        run: |
+          cmake -S supervisor -B supervisor\build -G "Visual Studio 17 2022" -A x64
+          cmake --build supervisor\build --config Release
+
+      - name: Verify both supervisor binaries produced
+        shell: pwsh
+        run: |
+          $sup  = 'supervisor\build\Release\supervisor.exe'
+          $hook = 'supervisor\build\Release\mtx_event_hook.exe'
+          if (-not (Test-Path $sup))  { throw "supervisor.exe missing" }
+          if (-not (Test-Path $hook)) { throw "mtx_event_hook.exe missing" }
+          Get-Item $sup, $hook | Select-Object FullName, Length
+
+      - name: Build WPF UI (Release)
+        shell: pwsh
+        run: dotnet build ui\WebcamStreamerUi -c Release
+
+      - name: Static installer verification (no camera needed)
+        shell: pwsh
+        # verify-installer.ps1 reads setup.iss + checks build outputs;
+        # doesn't require Inno Setup to be installed in this job since
+        # we're not compiling the .iss here.
+        run: .\scripts\verify-installer.ps1

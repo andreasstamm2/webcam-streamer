@@ -1,0 +1,103 @@
+name: Release installer
+
+# Triggers:
+#   - Pushing a tag of the form v* (e.g. v0.1.0)   -> build + attach to a GH Release
+#   - Manual workflow_dispatch                      -> build only; downloads as artifact
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to embed (without leading v)'
+        required: true
+        default: '0.0.0-dev'
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            $tag = '${{ github.ref_name }}'         # e.g. v0.1.0
+            $v   = $tag -replace '^v',''
+          } else {
+            $v   = '${{ inputs.version }}'
+          }
+          Write-Host "Version: $v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          # ISCC.exe lands in C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+          $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup 6' -Filter ISCC.exe -EA 0 | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after install" }
+          Write-Host "ISCC: $($iscc.FullName)"
+          "ISCC_PATH=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Fetch third-party binaries (MediaMTX, FFmpeg, nlohmann/json)
+        shell: pwsh
+        run: .\scripts\setup-deps.ps1
+
+      - name: Build supervisor + helper exe (CMake / MSVC Release)
+        shell: pwsh
+        run: |
+          cmake -S supervisor -B supervisor\build -G "Visual Studio 17 2022" -A x64
+          cmake --build supervisor\build --config Release
+
+      - name: Publish WPF UI (self-contained, single-file)
+        shell: pwsh
+        run: |
+          dotnet publish ui\WebcamStreamerUi `
+            -c Release -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:PublishReadyToRun=true `
+            -o ui\WebcamStreamerUi\publish
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          & "$env:ISCC_PATH" "/DAppVersion=${{ steps.ver.outputs.version }}" installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          $out = Get-Item "installer\output\WebcamStreamerSetup-v${{ steps.ver.outputs.version }}.exe"
+          Write-Host "Built: $($out.FullName) ($([math]::Round($out.Length/1MB,1)) MB)"
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebcamStreamerSetup-v${{ steps.ver.outputs.version }}
+          path: installer/output/WebcamStreamerSetup-v${{ steps.ver.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        # Only when a real tag triggered the build. Manual runs just leave
+        # the installer as a workflow artifact, downloadable from the run page.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/output/WebcamStreamerSetup-v${{ steps.ver.outputs.version }}.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

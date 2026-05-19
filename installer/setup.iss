@@ -180,7 +180,7 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM mediamtx.exe /T";         Fl
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ffmpeg.exe /T";           Flags: runhidden; RunOnceId: "KillFf"
 
 ; Remove the firewall rule we created.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Webcam Streamer (RTSP)"""; Flags: runhidden
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Webcam Streamer (RTSP)"""; Flags: runhidden; RunOnceId: "DelFwRule"
 
 [UninstallDelete]
 ; Per-user state (probes + settings.json) is wiped on uninstall per the
