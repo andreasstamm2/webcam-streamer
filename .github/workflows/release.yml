@@ -70,10 +70,15 @@ jobs:
 
       - name: Publish WPF UI (self-contained, single-file)
         shell: pwsh
+        # -p:Version threads the tag-derived version into AssemblyVersion,
+        # FileVersion, and AssemblyInformationalVersion. The About dialog
+        # reads InformationalVersion at runtime, so the WPF About box and
+        # the installer's "About" entry can no longer drift from the tag.
         run: |
           dotnet publish ui\WebcamStreamerUi `
             -c Release -r win-x64 `
             --self-contained true `
+            -p:Version=${{ steps.ver.outputs.version }} `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:PublishReadyToRun=true `

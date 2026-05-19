@@ -15,9 +15,13 @@
 
     <!-- App identity and version. <Version> drives AssemblyVersion,
          FileVersion, and InformationalVersion; the About dialog reads
-         InformationalVersion at runtime. Bump in lockstep with the
-         installer's -Version flag and the git release tag. -->
-    <Version>0.1.0</Version>
+         InformationalVersion at runtime.
+         Release builds OVERRIDE this via `dotnet publish -p:Version=<tag>`
+         (see .github/workflows/release.yml and installer/build-installer.ps1),
+         so this value is just the fallback for local `dotnet run` /
+         `dotnet build`. Keep it in sync with the next planned release so
+         devs running the bare exe don't see a stale About box. -->
+    <Version>0.2.1</Version>
     <Authors>Andreas Stamm</Authors>
     <Company>Andreas Stamm</Company>
     <Product>Webcam Streamer</Product>

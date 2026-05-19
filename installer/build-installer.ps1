@@ -77,6 +77,7 @@ dotnet publish "$RepoRoot\ui\WebcamStreamerUi" `
     -c Release `
     -r win-x64 `
     --self-contained true `
+    -p:Version=$Version `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:PublishReadyToRun=true `
