@@ -14,6 +14,11 @@ on:
         required: true
         default: '0.0.0-dev'
 
+permissions:
+  # softprops/action-gh-release needs contents:write to create the release
+  # and upload assets. Default GITHUB_TOKEN scope is contents:read only.
+  contents: write
+
 jobs:
   build-installer:
     runs-on: windows-latest
