@@ -1,0 +1,116 @@
+<Window x:Class="WebcamStreamerUi.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="About Webcam Streamer"
+        Width="420" SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#F5F7FA"
+        FontFamily="Segoe UI" FontSize="13"
+        Foreground="#1F2937">
+    <!--
+        Read-only "About" dialog. Reached from:
+          - Tray menu → "About..."
+          - MainWindow toolbar → "About" button
+
+        Version text is populated from the assembly's InformationalVersion
+        attribute (set via <Version> in the csproj) in code-behind. All
+        hyperlinks open in the default browser / mail client via
+        Process.Start with UseShellExecute=true.
+
+        The icon block at the top is a PLACEHOLDER. To swap in a real
+        graphic, replace the Border below with:
+            <Image Width="64" Height="64"
+                   Source="pack://application:,,,/Resources/app-icon.png"/>
+        and add the PNG (or ICO) to the project as Resource.
+    -->
+    <Grid Margin="22,18,22,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Row 0: icon + product name + version, in a single horizontal block -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,16">
+            <!-- Icon placeholder. 64x64 rounded block with a webcam glyph.
+                 Replace with a real <Image> once an icon asset exists. -->
+            <Border Width="64" Height="64" CornerRadius="8"
+                    Background="#1D4ED8" VerticalAlignment="Top">
+                <TextBlock Text="📷"
+                           FontSize="36"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="White"/>
+            </Border>
+
+            <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="Webcam Streamer"
+                           FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock x:Name="VersionText"
+                           Text="Version —"
+                           Foreground="#6B7280" FontSize="13"
+                           Margin="0,2,0,0"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Row 1: License -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,8">
+            <TextBlock Text="License"
+                       Foreground="#6B7280" FontSize="11"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,2"/>
+            <TextBlock>
+                <Hyperlink NavigateUri="https://www.gnu.org/licenses/gpl-3.0.html"
+                           RequestNavigate="Hyperlink_RequestNavigate">
+                    GNU General Public License v3.0
+                </Hyperlink>
+                <Run Text="  —  see "/>
+                <Hyperlink x:Name="LicenseFileLink"
+                           NavigateUri="https://github.com/andreasstamm2/webcam-streamer/blob/main/LICENSE"
+                           RequestNavigate="Hyperlink_RequestNavigate">LICENSE</Hyperlink>
+                <Run Text="."/>
+            </TextBlock>
+        </StackPanel>
+
+        <!-- Row 2: Developer -->
+        <StackPanel Grid.Row="2" Margin="0,8,0,8">
+            <TextBlock Text="Developer"
+                       Foreground="#6B7280" FontSize="11"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,2"/>
+            <TextBlock>
+                <Run Text="Andreas Stamm"/>
+                <Run Text="  —  "/>
+                <Hyperlink NavigateUri="mailto:andreasstamm@gmx.de"
+                           RequestNavigate="Hyperlink_RequestNavigate">
+                    andreasstamm@gmx.de
+                </Hyperlink>
+            </TextBlock>
+        </StackPanel>
+
+        <!-- Row 3: Project -->
+        <StackPanel Grid.Row="3" Margin="0,8,0,16">
+            <TextBlock Text="Project"
+                       Foreground="#6B7280" FontSize="11"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,2"/>
+            <TextBlock>
+                <Hyperlink NavigateUri="https://github.com/andreasstamm2/webcam-streamer"
+                           RequestNavigate="Hyperlink_RequestNavigate">
+                    github.com/andreasstamm2/webcam-streamer
+                </Hyperlink>
+            </TextBlock>
+        </StackPanel>
+
+        <!-- Row 4: Close button -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Close" MinWidth="80" Padding="14,6"
+                    IsDefault="True" IsCancel="True"
+                    Click="Close_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

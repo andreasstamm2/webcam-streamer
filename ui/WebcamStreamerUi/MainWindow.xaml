@@ -3,85 +3,347 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:WebcamStreamerUi"
         Title="Webcam Streamer"
-        Height="520" Width="980"
-        Background="#1E1E1E" Foreground="#DDD"
-        FontFamily="Segoe UI">
+        Height="600" Width="1240"
+        Background="#F5F7FA" Foreground="#1F2937"
+        FontFamily="Segoe UI" FontSize="13"
+        UseLayoutRounding="True">
+
     <Window.Resources>
+        <!-- Color tokens -->
+        <SolidColorBrush x:Key="bgPanel"      Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="bgChrome"     Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="bgStatus"     Color="#F3F4F6"/>
+        <SolidColorBrush x:Key="bgRowAlt"     Color="#FAFBFC"/>
+        <SolidColorBrush x:Key="bgRowHover"   Color="#F1F5F9"/>
+        <SolidColorBrush x:Key="bgRowSel"     Color="#DBEAFE"/>
+        <SolidColorBrush x:Key="border"       Color="#E5E7EB"/>
+        <SolidColorBrush x:Key="textPrimary"  Color="#1F2937"/>
+        <SolidColorBrush x:Key="textMuted"    Color="#6B7280"/>
+        <SolidColorBrush x:Key="textHeader"   Color="#4B5563"/>
+        <SolidColorBrush x:Key="accent"       Color="#1D4ED8"/>
+        <SolidColorBrush x:Key="ok"           Color="#10B981"/>
+        <SolidColorBrush x:Key="warn"         Color="#F59E0B"/>
+        <SolidColorBrush x:Key="off"          Color="#9CA3AF"/>
+        <SolidColorBrush x:Key="err"          Color="#EF4444"/>
+
+        <!-- Light, minimal button -->
         <Style TargetType="Button">
-            <Setter Property="Padding" Value="10,4"/>
-            <Setter Property="Margin"  Value="2"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Margin"  Value="0,0,6,0"/>
+            <Setter Property="MinWidth" Value="68"/>
+            <Setter Property="Background" Value="{StaticResource bgPanel}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{StaticResource textPrimary}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#F9FAFB"/>
+                                <Setter TargetName="b" Property="BorderBrush" Value="#9CA3AF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#E5E7EB"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="b" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ComboBox: clean & legible -->
+        <Style TargetType="ComboBox">
+            <Setter Property="Background" Value="{StaticResource bgPanel}"/>
+            <Setter Property="Foreground" Value="{StaticResource textPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
+            <Setter Property="FontSize" Value="12"/>
         </Style>
     </Window.Resources>
 
     <DockPanel>
-        <ToolBar DockPanel.Dock="Top" Background="#2D2D30">
-            <Button Content="Refresh" Click="Refresh_Click"/>
-            <Separator/>
-            <Button Content="Shut down supervisor" Click="Shutdown_Click"/>
-            <Separator/>
-            <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#AAA"
-                       Text="LAN URL pattern:  rtsp://viewer:viewer@&lt;sender-pc&gt;:8554/&lt;path&gt;"/>
-        </ToolBar>
+        <!-- Top bar -->
+        <Border DockPanel.Dock="Top"
+                Background="{StaticResource bgChrome}"
+                BorderBrush="{StaticResource border}" BorderThickness="0,0,0,1"
+                Padding="14,10">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <TextBlock Text="Webcam Streamer"
+                               FontSize="15" FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Margin="0,0,18,0"/>
+                    <Button Content="Refresh"             Click="Refresh_Click"/>
+                    <Button Content="Shut down supervisor" Click="Shutdown_Click"/>
+                    <Button Content="About"               Click="About_Click"/>
+                </StackPanel>
+                <TextBlock VerticalAlignment="Center"
+                           HorizontalAlignment="Right"
+                           Foreground="{StaticResource textMuted}"
+                           FontFamily="Consolas, Cascadia Mono, monospace" FontSize="12"
+                           Text="LAN URL pattern:  rtsp://viewer:viewer@&lt;sender-pc&gt;:8554/&lt;path&gt;"/>
+            </DockPanel>
+        </Border>
 
-        <StatusBar DockPanel.Dock="Bottom" Background="#2D2D30" Foreground="#DDD">
-            <StatusBarItem><TextBlock Text="{Binding ConnectionStatus}"/></StatusBarItem>
-            <Separator/>
-            <StatusBarItem><TextBlock Text="{Binding MediaMtxStatus}"/></StatusBarItem>
-        </StatusBar>
+        <!-- Status bar -->
+        <Border DockPanel.Dock="Bottom"
+                Background="{StaticResource bgStatus}"
+                BorderBrush="{StaticResource border}" BorderThickness="0,1,0,0"
+                Padding="14,7">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding ConnectionStatus}" Foreground="{StaticResource textPrimary}"/>
+                <TextBlock Text=" • " Margin="10,0" Foreground="{StaticResource textMuted}"/>
+                <TextBlock Text="{Binding MediaMtxStatus}"   Foreground="{StaticResource textPrimary}"/>
+            </StackPanel>
+        </Border>
 
+        <!-- Camera grid -->
         <DataGrid x:Name="CamGrid"
                   ItemsSource="{Binding Cameras}"
                   AutoGenerateColumns="False"
-                  Background="#252526"
-                  Foreground="#DDD"
-                  RowBackground="#252526"
-                  AlternatingRowBackground="#2D2D30"
+                  Background="{StaticResource bgPanel}"
+                  Foreground="{StaticResource textPrimary}"
+                  RowBackground="{StaticResource bgPanel}"
+                  AlternatingRowBackground="{StaticResource bgRowAlt}"
                   GridLinesVisibility="Horizontal"
-                  HorizontalGridLinesBrush="#404040"
+                  HorizontalGridLinesBrush="{StaticResource border}"
+                  BorderBrush="{StaticResource border}" BorderThickness="0"
                   CanUserAddRows="False" CanUserDeleteRows="False"
+                  CanUserResizeRows="False" CanUserReorderColumns="False"
                   IsReadOnly="True"
-                  HeadersVisibility="Column">
+                  HeadersVisibility="Column"
+                  RowHeight="46"
+                  ColumnHeaderHeight="34"
+                  SelectionUnit="FullRow"
+                  Margin="0">
+            <DataGrid.Resources>
+                <!-- Header style -->
+                <Style TargetType="DataGridColumnHeader">
+                    <Setter Property="Background"     Value="#F9FAFB"/>
+                    <Setter Property="Foreground"     Value="{StaticResource textHeader}"/>
+                    <Setter Property="FontWeight"     Value="SemiBold"/>
+                    <Setter Property="FontSize"       Value="12"/>
+                    <Setter Property="BorderBrush"    Value="{StaticResource border}"/>
+                    <Setter Property="BorderThickness" Value="0,0,1,1"/>
+                    <Setter Property="Padding"        Value="12,8"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                </Style>
+
+                <!-- Cell -->
+                <Style TargetType="DataGridCell">
+                    <Setter Property="BorderThickness" Value="0"/>
+                    <Setter Property="Padding"         Value="12,4"/>
+                    <Setter Property="VerticalContentAlignment" Value="Center"/>
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="{StaticResource bgRowSel}"/>
+                            <Setter Property="Foreground" Value="{StaticResource textPrimary}"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+
+                <!-- Row -->
+                <Style TargetType="DataGridRow">
+                    <Style.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{StaticResource bgRowHover}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="{StaticResource bgRowSel}"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.Resources>
+
             <DataGrid.Columns>
-                <DataGridTextColumn     Header="Name"     Binding="{Binding Name}"      Width="160"/>
-                <DataGridTextColumn     Header="Path"     Binding="{Binding Path}"      Width="80"/>
-                <DataGridTemplateColumn Header="Mode"                                   Width="230">
+                <!-- Camera friendly name -->
+                <DataGridTextColumn Header="Camera" Binding="{Binding Name}" Width="200">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- RTSP path -->
+                <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="92">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
+                            <Setter Property="Foreground" Value="{StaticResource accent}"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- Mode dropdown - wide enough for the longest mode name -->
+                <DataGridTemplateColumn Header="Mode" Width="245">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <ComboBox ItemsSource="{x:Static local:Modes.All}"
                                       SelectedItem="{Binding Mode, Mode=OneWay}"
                                       SelectionChanged="ModeCombo_SelectionChanged"
                                       Tag="{Binding}"
-                                      Margin="2"
-                                      Background="#3C3C3C"
-                                      Foreground="#DDD"
-                                      BorderBrush="#555"/>
+                                      Margin="6,6"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridCheckBoxColumn Header="Running"  Binding="{Binding Running}"   Width="60"/>
-                <DataGridCheckBoxColumn Header="Present"  Binding="{Binding Present}"   Width="60"/>
-                <DataGridTextColumn     Header="PID"      Binding="{Binding Pid}"       Width="60"/>
-                <DataGridTextColumn     Header="Re#"      Binding="{Binding Restarts}"  Width="40"/>
-                <DataGridTemplateColumn Header="URL"      Width="*">
+
+                <!-- Resolution dropdown -->
+                <DataGridTemplateColumn Header="Resolution" Width="115">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox ItemsSource="{x:Static local:Resolutions.All}"
+                                      SelectedItem="{Binding Resolution, Mode=OneWay}"
+                                      SelectionChanged="ResolutionCombo_SelectionChanged"
+                                      Tag="{Binding}"
+                                      Margin="6,6"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Live status pill -->
+                <DataGridTemplateColumn Header="Status" Width="120">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="10" Padding="8,2"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <!-- Default = unplugged grey -->
+                                        <Setter Property="Background" Value="#F3F4F6"/>
+                                        <Setter Property="BorderBrush" Value="#D1D5DB"/>
+                                        <Setter Property="BorderThickness" Value="1"/>
+                                        <Style.Triggers>
+                                            <!-- Plugged + running = green -->
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Present}" Value="True"/>
+                                                    <Condition Binding="{Binding Running}" Value="True"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Background"  Value="#D1FAE5"/>
+                                                <Setter Property="BorderBrush" Value="#10B981"/>
+                                            </MultiDataTrigger>
+                                            <!-- Plugged but not running = amber (restarting) -->
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Present}" Value="True"/>
+                                                    <Condition Binding="{Binding Running}" Value="False"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Background"  Value="#FEF3C7"/>
+                                                <Setter Property="BorderBrush" Value="#F59E0B"/>
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="UNPLUGGED"/>
+                                            <Setter Property="Foreground" Value="#6B7280"/>
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Present}" Value="True"/>
+                                                        <Condition Binding="{Binding Running}" Value="True"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Text"       Value="● LIVE"/>
+                                                    <Setter Property="Foreground" Value="#047857"/>
+                                                </MultiDataTrigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Present}" Value="True"/>
+                                                        <Condition Binding="{Binding Running}" Value="False"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Text"       Value="STARTING"/>
+                                                    <Setter Property="Foreground" Value="#92400E"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- PID -->
+                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="64">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
+                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- Restarts (right-aligned) -->
+                <DataGridTextColumn Header="Restarts" Binding="{Binding Restarts}" Width="68">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace"/>
+                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="Padding" Value="0,0,12,0"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- Full RTSP URL (selectable / copyable) -->
+                <DataGridTemplateColumn Header="RTSP URL" Width="*" MinWidth="280">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <TextBox Text="{Binding FullUrl, Mode=OneWay}"
-                                     IsReadOnly="True"
-                                     BorderThickness="0"
+                                     IsReadOnly="True" BorderThickness="0"
                                      Background="Transparent"
-                                     Foreground="#9CDCFE"
+                                     Foreground="{StaticResource accent}"
+                                     FontFamily="Consolas, Cascadia Mono, monospace"
+                                     FontSize="12"
                                      VerticalAlignment="Center"
-                                     Cursor="IBeam"/>
+                                     ToolTip="Click to select; Ctrl+C to copy"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn     Header="Probe status"
-                                        Binding="{Binding ProbeStatus}"
-                                        Width="180"/>
-                <DataGridTemplateColumn Header="" Width="160">
+
+                <!-- Probe status -->
+                <DataGridTextColumn Header="Probe status" Binding="{Binding ProbeStatus}" Width="180">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
+                            <Setter Property="TextWrapping" Value="Wrap"/>
+                            <Setter Property="FontSize" Value="12"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- Per-row actions -->
+                <DataGridTemplateColumn Header="" Width="170">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="Probe"   Click="Probe_Click"   Tag="{Binding}"/>
                                 <Button Content="Restart" Click="Restart_Click" Tag="{Binding}"/>
                             </StackPanel>

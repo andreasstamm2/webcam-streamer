@@ -102,6 +102,7 @@ public partial class App : System.Windows.Application
         _tray = new TrayIcon(Settings, Vm.Cameras);
         _tray.AdvancedSettingsClicked += (_, _) => ShowMainWindow();
         _tray.SettingsClicked         += (_, _) => ShowSettingsWindow();
+        _tray.AboutClicked            += (_, _) => ShowAboutWindow();
         _tray.NotificationsToggled    += async (_, on) =>
         {
             Settings.NotificationsEnabled = on;
@@ -203,6 +204,25 @@ public partial class App : System.Windows.Application
         // the Notifications toggle back to the tray (the tray's menu item
         // is the other authoritative source).
         _tray?.SyncNotificationToggle(Settings.NotificationsEnabled);
+    }
+
+    // About dialog: read-only, modal. If the MainWindow happens to be
+    // open we anchor on it so the dialog centers there; otherwise it
+    // centers on the primary screen.
+    public void ShowAboutWindow()
+    {
+        var owner = (_mainWindow != null && _mainWindow.IsVisible) ? _mainWindow : null;
+        var w = new AboutWindow();
+        if (owner != null)
+        {
+            w.Owner = owner;
+            w.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        else
+        {
+            w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
+        w.ShowDialog();
     }
 
     private void ExitApp()

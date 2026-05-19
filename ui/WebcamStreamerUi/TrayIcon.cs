@@ -35,6 +35,7 @@ public sealed class TrayIcon : IDisposable
 
     public event EventHandler? AdvancedSettingsClicked;
     public event EventHandler? SettingsClicked;
+    public event EventHandler? AboutClicked;
     public event EventHandler<bool>? NotificationsToggled;     // arg = new state
     public event EventHandler<(string CameraName, bool Enabled)>? CameraEnableChanged;
     public event EventHandler? ExitRequested;
@@ -73,6 +74,11 @@ public sealed class TrayIcon : IDisposable
         var advanced = new ToolStripMenuItem("Advanced Settings...");
         advanced.Click += (_, _) => AdvancedSettingsClicked?.Invoke(this, EventArgs.Empty);
         _menu.Items.Add(advanced);
+        _menu.Items.Add(new ToolStripSeparator());
+
+        var about = new ToolStripMenuItem("About...");
+        about.Click += (_, _) => AboutClicked?.Invoke(this, EventArgs.Empty);
+        _menu.Items.Add(about);
         _menu.Items.Add(new ToolStripSeparator());
 
         var exit = new ToolStripMenuItem("Exit");

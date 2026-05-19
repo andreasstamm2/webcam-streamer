@@ -12,6 +12,16 @@
     <UseWPF>true</UseWPF>
     <!-- Enables System.Windows.Forms.NotifyIcon inside this WPF app. -->
     <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- App identity and version. <Version> drives AssemblyVersion,
+         FileVersion, and InformationalVersion; the About dialog reads
+         InformationalVersion at runtime. Bump in lockstep with the
+         installer's -Version flag and the git release tag. -->
+    <Version>0.1.0</Version>
+    <Authors>Andreas Stamm</Authors>
+    <Company>Andreas Stamm</Company>
+    <Product>Webcam Streamer</Product>
+    <Copyright>Copyright (c) 2026 Andreas Stamm</Copyright>
   </PropertyGroup>
 
   <ItemGroup>

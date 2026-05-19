@@ -63,6 +63,14 @@ public partial class MainWindow : Window
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        // Delegate to the host so the About dialog is owned by the same
+        // single-instance App that owns the tray icon. Mirror of the
+        // tray's "About..." menu item.
+        App.Instance?.ShowAboutWindow();
+    }
+
     private async void Restart_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: CameraInfo cam } || _ipc == null) return;
