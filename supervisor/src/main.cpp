@@ -93,6 +93,12 @@ static bool WaitForRtspReady(int port, std::chrono::milliseconds timeout) {
 
 struct Backoff {
     std::chrono::steady_clock::time_point last_start{};
+    // The supervision loop must not restart until this point. Set whenever
+    // we start p; consulted by the loop BEFORE the next restart attempt.
+    // Holding state_mutex during a multi-second sleep would block every
+    // IPC handler (probe, restart, set-mode, ...) and was the cause of the
+    // v0.2.0 "probe timed out" symptom whenever ffmpeg was flapping.
+    std::chrono::steady_clock::time_point earliest_next{};
     std::chrono::milliseconds              delay{1000};
     int                                    restarts{0};
 };
@@ -103,29 +109,25 @@ struct CamSlot {
     Backoff                            backoff;
     bool                               last_running = false;  // for state-change events
     bool                               present      = true;   // false = unplugged; supervision skips restarts
+    int                                viewer_count = 0;       // bumped by events-pipe runOnRead/Unread
 };
 
-static void StartWithBackoff(SupervisedProcess& p, Backoff& b) {
+// Start p now and update backoff bookkeeping. Never sleeps. Callers that
+// want to throttle restart storms (the supervision loop) MUST check
+// b.earliest_next before calling. IPC handlers and hot-plug paths call
+// this directly because the user is asking for immediate action.
+static void StartNoSleep(SupervisedProcess& p, Backoff& b) {
     if (g_stop) return;
     auto now = std::chrono::steady_clock::now();
-    if (b.restarts > 0) {
-        if (now - b.last_start > 60s) {
-            b.delay = 1000ms;
-            b.restarts = 0;
-        }
-        if (b.restarts > 0) {
-            Info("backoff " + std::to_string(b.delay.count()) + "ms before restart of " +
-                 WideToUtf8(p.Name()) + " (attempt " + std::to_string(b.restarts + 1) + ")");
-            auto deadline = std::chrono::steady_clock::now() + b.delay;
-            while (!g_stop && std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(100ms);
-            }
-            b.delay = std::min<std::chrono::milliseconds>(b.delay * 2, 30000ms);
-        }
+    if (b.restarts > 0 && now - b.last_start > 60s) {
+        // Process has been up >60s -- previous failure was a one-off.
+        b.delay = 1000ms;
+        b.restarts = 0;
     }
-    if (g_stop) return;
-    b.last_start = std::chrono::steady_clock::now();
+    b.last_start    = now;
     b.restarts++;
+    b.earliest_next = now + b.delay;
+    b.delay         = std::min<std::chrono::milliseconds>(b.delay * 2, 30000ms);
     if (!p.Start()) {
         Error("failed to start " + WideToUtf8(p.Name()));
     }
@@ -145,6 +147,7 @@ static json CamToJson(const CamSlot& s) {
         {"enabled",  s.cfg.enabled},
         {"pid",      s.proc ? (uint32_t)s.proc->Pid() : 0},
         {"restarts", s.backoff.restarts},
+        {"viewer_count", s.viewer_count},
     };
 }
 
@@ -268,15 +271,16 @@ int wmain() {
     auto resolveCameraConfig = [&](std::wstring_view name, CameraConfig& cc) {
         auto ov = LoadOverride(probesDir, name);
 
-        // Mode: override beats probe-recommended beats default.
+        // Mode resolution policy (changed in v0.2.1): user override wins;
+        // on everything else we use transcode_mjpeg_to_h264 unconditionally.
+        // We deliberately IGNORE the probe-summary recommendation because
+        // probe-camera.ps1's frame-count check has known false positives
+        // (HP 5MP passthrough MJPEG: probe says ok=true, decoder gets only
+        // the top of every frame -- see CLAUDE.md codec matrix). Until the
+        // probe gains a visual-integrity check, transcode_mjpeg_to_h264 is
+        // the only pipeline confirmed working across all cams we ship for.
         if (ov && ov->mode) cc.mode = *ov->mode;
-        else if (auto p = LoadProbeResult(probesDir, name);
-                  p && p->recommended != Mode::Unknown) cc.mode = p->recommended;
-        else {
-            cc.mode = Mode::PassthroughMjpeg;
-            Warn("cam '" + WideToUtf8(name) +
-                 "' has no probe summary; defaulting to passthrough_mjpeg");
-        }
+        else                cc.mode = Mode::TranscodeMjpegToH264;
 
         // Resolution / fps overrides (rare; HP-RAW@640x480 is the canonical case).
         if (ov) {
@@ -346,7 +350,7 @@ int wmain() {
     };
     auto mtx = std::make_unique<SupervisedProcess>(mtxCfg, job);
     Backoff bMtx;
-    StartWithBackoff(*mtx, bMtx);
+    StartNoSleep(*mtx, bMtx);
 
     if (!WaitForRtspReady(8554, 10s)) {
         Error("mediamtx did not become ready on :8554 within 10s");
@@ -369,7 +373,7 @@ int wmain() {
     // keep their SupervisedProcess object (so set-stream-enabled true later
     // can just Start() it) but never spawn ffmpeg.
     for (auto& s : slots) {
-        if (s.cfg.enabled) StartWithBackoff(*s.proc, s.backoff);
+        if (s.cfg.enabled) StartNoSleep(*s.proc, s.backoff);
         else               Info("cam '" + WideToUtf8(s.cfg.friendly_name) +
                                 "' is disabled; not publishing.");
     }
@@ -389,7 +393,11 @@ int wmain() {
     auto rebuildSlot = [&](CamSlot& s) {
         s.proc = std::make_unique<SupervisedProcess>(
                      MakeFFmpegProcessConfig(ffExe, s.cfg, publisher), job);
-        s.backoff = Backoff{};
+        s.backoff      = Backoff{};
+        // When the publisher process is rebuilt, MediaMTX may not deliver
+        // unread events for the readers attached to the prior path. Reset
+        // the count so the UI doesn't show ghost viewers.
+        s.viewer_count = 0;
     };
 
     IpcServer ipc(L"\\\\.\\pipe\\webcam-streamer-supervisor",
@@ -423,7 +431,7 @@ int wmain() {
                             found = true;
                             s.proc->Stop();
                             rebuildSlot(s);
-                            StartWithBackoff(*s.proc, s.backoff);
+                            StartNoSleep(*s.proc, s.backoff);
                             // The main loop won't observe the down/up flap
                             // since this handler runs synchronously, so emit
                             // the event ourselves to keep clients in sync.
@@ -469,7 +477,7 @@ int wmain() {
                         SaveOverride(probesDir, wname, upd);
                         s.proc->Stop();
                         rebuildSlot(s);
-                        StartWithBackoff(*s.proc, s.backoff);
+                        StartNoSleep(*s.proc, s.backoff);
                         ipc.PublishEvent("camera-state-changed", CamToJson(s));
                         s.last_running = s.proc->IsRunning();
                         // Echo effective values so the client sees what's actually running.
@@ -568,7 +576,7 @@ int wmain() {
                             if (s.present) {
                                 s.proc->Stop();
                                 rebuildSlot(s);
-                                StartWithBackoff(*s.proc, s.backoff);
+                                StartNoSleep(*s.proc, s.backoff);
                             }
                         } else {
                             // Disable: kill the publisher. Keep the
@@ -645,6 +653,19 @@ int wmain() {
             out["reader_ip"]   = reader_ip;
             out["reader_user"] = user;
             std::wstring wpath = Utf8ToWide(mtx_path);
+            const char* name = (ev_type == "read") ? "viewer-connected"
+                              : (ev_type == "unread") ? "viewer-disconnected"
+                              : nullptr;
+            if (!name) {
+                Warn("events-pipe: unknown event type '" + ev_type + "'");
+                return;
+            }
+            // Mutate the matched slot's viewer_count and republish
+            // camera-state-changed so every UI surface (DataGrid status pill,
+            // tray tooltip, tray submenu) derives its visual from a single
+            // authoritative count -- no UI-side tally that could drift.
+            json stateEvent;
+            bool haveStateEvent = false;
             {
                 std::lock_guard<std::mutex> g(state_mutex);
                 auto it = std::find_if(slots.begin(), slots.end(),
@@ -659,20 +680,18 @@ int wmain() {
                     out["codec"]      = codecForMode(it->cfg.mode);
                     out["width"]      = it->cfg.width;
                     out["height"]     = it->cfg.height;
+                    if (ev_type == "read") it->viewer_count++;
+                    else if (ev_type == "unread" && it->viewer_count > 0) it->viewer_count--;
+                    stateEvent     = CamToJson(*it);
+                    haveStateEvent = true;
                 } else {
                     out["camera"]     = mtx_path;
                     out["mode"]       = "unknown";
                     out["codec"]      = "unknown";
                 }
             }
-            const char* name = (ev_type == "read") ? "viewer-connected"
-                              : (ev_type == "unread") ? "viewer-disconnected"
-                              : nullptr;
-            if (!name) {
-                Warn("events-pipe: unknown event type '" + ev_type + "'");
-                return;
-            }
             ipc.PublishEvent(name, out);
+            if (haveStateEvent) ipc.PublishEvent("camera-state-changed", stateEvent);
             Info(std::string(name) + ": cam='" + out.value("camera", std::string{}) +
                  "' reader=" + reader_ip);
         });
@@ -707,13 +726,17 @@ int wmain() {
         {
             std::lock_guard<std::mutex> g(state_mutex);
 
+            auto now = std::chrono::steady_clock::now();
+
             if (!mtx->IsRunning()) {
-                Warn("mediamtx exited code=" + std::to_string(mtx->GetExitCode()));
-                mtx->Stop();
-                StartWithBackoff(*mtx, bMtx);
-                WaitForRtspReady(8554, 10s);
-                ipc.PublishEvent("mediamtx-state-changed",
-                                 json{{"running", mtx->IsRunning()}});
+                if (now >= bMtx.earliest_next) {
+                    Warn("mediamtx exited code=" + std::to_string(mtx->GetExitCode()));
+                    mtx->Stop();
+                    StartNoSleep(*mtx, bMtx);
+                    WaitForRtspReady(8554, 10s);
+                    ipc.PublishEvent("mediamtx-state-changed",
+                                     json{{"running", mtx->IsRunning()}});
+                }
             }
 
             for (auto& s : slots) {
@@ -722,18 +745,28 @@ int wmain() {
                     // do not auto-restart. last_running is kept in sync so
                     // the next transition (re-enable or re-plug) fires a
                     // state-change event.
-                    if (s.last_running) {
+                    if (s.last_running || s.viewer_count != 0) {
                         s.last_running = false;
+                        s.viewer_count = 0;
                         ipc.PublishEvent("camera-state-changed", CamToJson(s));
                     }
                     continue;
                 }
                 bool running_now = s.proc->IsRunning();
-                if (!running_now) {
+                // Reset viewer_count when the publisher is down -- otherwise
+                // the count would stick if MediaMTX failed to deliver unread
+                // events for readers attached at the moment of crash.
+                if (!running_now && s.viewer_count != 0) s.viewer_count = 0;
+                if (!running_now && now >= s.backoff.earliest_next) {
+                    // Backoff window elapsed -- attempt restart. StartNoSleep
+                    // doubles the delay; if ffmpeg fails again immediately, the
+                    // next attempt is deferred. The supervision loop never
+                    // sleeps with state_mutex held, so IPC handlers stay
+                    // responsive throughout a restart storm.
                     Warn(WideToUtf8(s.proc->Name()) + " exited code=" +
                          std::to_string(s.proc->GetExitCode()));
                     s.proc->Stop();
-                    StartWithBackoff(*s.proc, s.backoff);
+                    StartNoSleep(*s.proc, s.backoff);
                     running_now = s.proc->IsRunning();
                 }
                 if (running_now != s.last_running) {
@@ -771,7 +804,7 @@ int wmain() {
                     s.present = true;
                     if (s.cfg.enabled) {
                         rebuildSlot(s);
-                        StartWithBackoff(*s.proc, s.backoff);
+                        StartNoSleep(*s.proc, s.backoff);
                     } else {
                         Info("  (kept disabled per user setting)");
                     }
@@ -795,7 +828,7 @@ int wmain() {
                              MakeFFmpegProcessConfig(ffExe, s.cfg, publisher), job);
                 slots.push_back(std::move(s));
                 if (s.cfg.enabled) {
-                    StartWithBackoff(*slots.back().proc, slots.back().backoff);
+                    StartNoSleep(*slots.back().proc, slots.back().backoff);
                 }
                 listChanged = true;
             }

@@ -91,8 +91,6 @@
                                FontSize="15" FontWeight="SemiBold"
                                VerticalAlignment="Center"
                                Margin="0,0,18,0"/>
-                    <Button Content="Refresh"             Click="Refresh_Click"/>
-                    <Button Content="Shut down supervisor" Click="Shutdown_Click"/>
                     <Button Content="About"               Click="About_Click"/>
                 </StackPanel>
                 <TextBlock VerticalAlignment="Center"
@@ -222,36 +220,63 @@
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
-                <!-- Live status pill -->
-                <DataGridTemplateColumn Header="Status" Width="120">
+                <!-- Status pill: single authoritative state model
+                     (matches CameraInfo properties, also drives the tray
+                     menu/tooltip): UNPLUGGED, DISABLED, STARTING, ENABLED,
+                     STREAMING. The leading dot on STREAMING is the visual
+                     cue that a viewer is actually attached right now. -->
+                <DataGridTemplateColumn Header="Status" Width="135">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <Border CornerRadius="10" Padding="8,2"
                                     HorizontalAlignment="Left" VerticalAlignment="Center">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <!-- Default = unplugged grey -->
+                                        <!-- Default = UNPLUGGED grey -->
                                         <Setter Property="Background" Value="#F3F4F6"/>
                                         <Setter Property="BorderBrush" Value="#D1D5DB"/>
                                         <Setter Property="BorderThickness" Value="1"/>
                                         <Style.Triggers>
-                                            <!-- Plugged + running = green -->
+                                            <!-- DISABLED: present && !enabled -->
                                             <MultiDataTrigger>
                                                 <MultiDataTrigger.Conditions>
                                                     <Condition Binding="{Binding Present}" Value="True"/>
-                                                    <Condition Binding="{Binding Running}" Value="True"/>
+                                                    <Condition Binding="{Binding Enabled}" Value="False"/>
                                                 </MultiDataTrigger.Conditions>
-                                                <Setter Property="Background"  Value="#D1FAE5"/>
-                                                <Setter Property="BorderBrush" Value="#10B981"/>
+                                                <Setter Property="Background"  Value="#E5E7EB"/>
+                                                <Setter Property="BorderBrush" Value="#9CA3AF"/>
                                             </MultiDataTrigger>
-                                            <!-- Plugged but not running = amber (restarting) -->
+                                            <!-- STARTING: present && enabled && !running -->
                                             <MultiDataTrigger>
                                                 <MultiDataTrigger.Conditions>
                                                     <Condition Binding="{Binding Present}" Value="True"/>
+                                                    <Condition Binding="{Binding Enabled}" Value="True"/>
                                                     <Condition Binding="{Binding Running}" Value="False"/>
                                                 </MultiDataTrigger.Conditions>
                                                 <Setter Property="Background"  Value="#FEF3C7"/>
                                                 <Setter Property="BorderBrush" Value="#F59E0B"/>
+                                            </MultiDataTrigger>
+                                            <!-- ENABLED: present && enabled && running && no viewers -->
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Present}" Value="True"/>
+                                                    <Condition Binding="{Binding Enabled}" Value="True"/>
+                                                    <Condition Binding="{Binding Running}" Value="True"/>
+                                                    <Condition Binding="{Binding HasViewers}" Value="False"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Background"  Value="#D1FAE5"/>
+                                                <Setter Property="BorderBrush" Value="#10B981"/>
+                                            </MultiDataTrigger>
+                                            <!-- STREAMING: viewer attached -->
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Present}" Value="True"/>
+                                                    <Condition Binding="{Binding Enabled}" Value="True"/>
+                                                    <Condition Binding="{Binding Running}" Value="True"/>
+                                                    <Condition Binding="{Binding HasViewers}" Value="True"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Background"  Value="#DBEAFE"/>
+                                                <Setter Property="BorderBrush" Value="#3B82F6"/>
                                             </MultiDataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -265,18 +290,39 @@
                                                 <MultiDataTrigger>
                                                     <MultiDataTrigger.Conditions>
                                                         <Condition Binding="{Binding Present}" Value="True"/>
-                                                        <Condition Binding="{Binding Running}" Value="True"/>
+                                                        <Condition Binding="{Binding Enabled}" Value="False"/>
                                                     </MultiDataTrigger.Conditions>
-                                                    <Setter Property="Text"       Value="● LIVE"/>
+                                                    <Setter Property="Text"       Value="DISABLED"/>
+                                                    <Setter Property="Foreground" Value="#4B5563"/>
+                                                </MultiDataTrigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Present}" Value="True"/>
+                                                        <Condition Binding="{Binding Enabled}" Value="True"/>
+                                                        <Condition Binding="{Binding Running}" Value="False"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Text"       Value="STARTING"/>
+                                                    <Setter Property="Foreground" Value="#92400E"/>
+                                                </MultiDataTrigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Present}" Value="True"/>
+                                                        <Condition Binding="{Binding Enabled}" Value="True"/>
+                                                        <Condition Binding="{Binding Running}" Value="True"/>
+                                                        <Condition Binding="{Binding HasViewers}" Value="False"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Text"       Value="ENABLED"/>
                                                     <Setter Property="Foreground" Value="#047857"/>
                                                 </MultiDataTrigger>
                                                 <MultiDataTrigger>
                                                     <MultiDataTrigger.Conditions>
                                                         <Condition Binding="{Binding Present}" Value="True"/>
-                                                        <Condition Binding="{Binding Running}" Value="False"/>
+                                                        <Condition Binding="{Binding Enabled}" Value="True"/>
+                                                        <Condition Binding="{Binding Running}" Value="True"/>
+                                                        <Condition Binding="{Binding HasViewers}" Value="True"/>
                                                     </MultiDataTrigger.Conditions>
-                                                    <Setter Property="Text"       Value="STARTING"/>
-                                                    <Setter Property="Foreground" Value="#92400E"/>
+                                                    <Setter Property="Text"       Value="● STREAMING"/>
+                                                    <Setter Property="Foreground" Value="#1D4ED8"/>
                                                 </MultiDataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -311,41 +357,54 @@
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
 
-                <!-- Full RTSP URL (selectable / copyable) -->
+                <!-- Full RTSP URL (selectable + one-click copy) -->
                 <DataGridTemplateColumn Header="RTSP URL" Width="*" MinWidth="280">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBox Text="{Binding FullUrl, Mode=OneWay}"
-                                     IsReadOnly="True" BorderThickness="0"
-                                     Background="Transparent"
-                                     Foreground="{StaticResource accent}"
-                                     FontFamily="Consolas, Cascadia Mono, monospace"
-                                     FontSize="12"
-                                     VerticalAlignment="Center"
-                                     ToolTip="Click to select; Ctrl+C to copy"/>
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Copy"
+                                        Click="CopyUrl_Click"
+                                        Tag="{Binding}"
+                                        MinWidth="56"
+                                        Margin="6,0,0,0"
+                                        ToolTip="Copy this RTSP URL to the clipboard"/>
+                                <TextBox Text="{Binding FullUrl, Mode=OneWay}"
+                                         IsReadOnly="True" BorderThickness="0"
+                                         Background="Transparent"
+                                         Foreground="{StaticResource accent}"
+                                         FontFamily="Consolas, Cascadia Mono, monospace"
+                                         FontSize="12"
+                                         VerticalAlignment="Center"
+                                         ToolTip="Click to select; Ctrl+C to copy"/>
+                            </DockPanel>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
-                <!-- Probe status -->
-                <DataGridTextColumn Header="Probe status" Binding="{Binding ProbeStatus}" Width="180">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="Foreground" Value="{StaticResource textMuted}"/>
-                            <Setter Property="TextWrapping" Value="Wrap"/>
-                            <Setter Property="FontSize" Value="12"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
-
-                <!-- Per-row actions -->
-                <DataGridTemplateColumn Header="" Width="170">
+                <!-- Per-row actions. The activate/deactivate button binds
+                     to set-stream-enabled; its label flips based on the
+                     Enabled flag so a single button covers both directions.
+                     Restart is only meaningful for enabled cams; disabled
+                     ones have no publisher to restart. -->
+                <DataGridTemplateColumn Header="" Width="200">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Content="Probe"   Click="Probe_Click"   Tag="{Binding}"/>
-                                <Button Content="Restart" Click="Restart_Click" Tag="{Binding}"/>
+                                <Button Click="EnableToggle_Click" Tag="{Binding}" MinWidth="92">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Content" Value="Deactivate"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                    <Setter Property="Content" Value="Activate"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Content="Restart" Click="Restart_Click" Tag="{Binding}"
+                                        IsEnabled="{Binding Enabled}"/>
                             </StackPanel>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>

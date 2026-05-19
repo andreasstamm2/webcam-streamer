@@ -33,9 +33,11 @@ public partial class MainWindow : Window
         // Initial pull (in case the user opens the window before the App's
         // first refresh propagated to all bindings).
         await RefreshAsync();
-        // Light poll while the window is visible: PID / restart counts can
-        // change without firing camera-state-changed.
-        _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        // Safety-net poll: live IPC events drive every UI update during
+        // normal operation, but a missed event (pump glitch, supervisor
+        // restart, etc.) would leave the grid stale. A quiet 5s sweep
+        // backstops that without the user needing a Refresh button.
+        _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _pollTimer.Tick += async (_, __) => await RefreshAsync();
         _pollTimer.Start();
     }
@@ -61,8 +63,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
-
     private void About_Click(object sender, RoutedEventArgs e)
     {
         // Delegate to the host so the About dialog is owned by the same
@@ -85,17 +85,48 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void Probe_Click(object sender, RoutedEventArgs e)
+    private void CopyUrl_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: CameraInfo cam } || _ipc == null) return;
+        // One-click copy of the per-row RTSP URL. Clipboard.SetText can
+        // occasionally throw under heavy clipboard contention (another app
+        // holding it open); catch + show a small message rather than
+        // crashing the host.
+        if (sender is not Button { Tag: CameraInfo cam }) return;
         try
         {
-            cam.ProbeStatus = "starting probe...";
-            await _ipc.CallAsync("probe-camera", new { name = cam.Name });
+            // Fully qualified: this project enables UseWindowsForms (for
+            // NotifyIcon), so `Clipboard` is ambiguous with
+            // System.Windows.Forms.Clipboard. We want the WPF one.
+            System.Windows.Clipboard.SetText(cam.FullUrl);
         }
         catch (Exception ex)
         {
-            cam.ProbeStatus = "probe call failed: " + ex.Message;
+            MessageBox.Show(this, "Could not copy URL:\n" + ex.Message,
+                            "Clipboard error", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async void EnableToggle_Click(object sender, RoutedEventArgs e)
+    {
+        // One button that flips between Deactivate (when enabled) and
+        // Activate (when disabled). Backed by set-stream-enabled on the
+        // supervisor, which kills the publisher when disabling and rebuilds
+        // it from a fresh SupervisedProcess when enabling. The button's
+        // label is driven by the bound CameraInfo.Enabled via a style
+        // trigger in MainWindow.xaml -- no manual swap needed here.
+        if (sender is not Button { Tag: CameraInfo cam } || _ipc == null) return;
+        bool wanted = !cam.Enabled;
+        try
+        {
+            await _ipc.CallAsync("set-stream-enabled",
+                                  new { name = cam.Name, enabled = wanted });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"could not {(wanted ? "activate" : "deactivate")} {cam.Name}:\n{ex.Message}",
+                "IPC error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await RefreshAsync();
         }
     }
 
@@ -144,13 +175,6 @@ public partial class MainWindow : Window
                             "IPC error", MessageBoxButton.OK, MessageBoxImage.Warning);
             await RefreshAsync();
         }
-    }
-
-    private void Shutdown_Click(object sender, RoutedEventArgs e)
-    {
-        // "Shutdown" in the WPF toolbar now means "close this view"; the
-        // tray menu's Exit is the only path that actually terminates.
-        Close();
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

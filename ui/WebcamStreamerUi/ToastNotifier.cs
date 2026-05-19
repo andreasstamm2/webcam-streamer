@@ -28,9 +28,15 @@ public sealed class ToastNotifier
         string codec  = StringOf(data, "codec",  "");
         int    width  = IntOf   (data, "width",  0);
         int    height = IntOf   (data, "height", 0);
-        string ip     = StringOf(data, "reader_ip", "(unknown)");
 
-        var body = $"{codec} · {width}×{height} · viewer from {ip}";
+        // We deliberately don't include the reader IP here: MediaMTX 1.18.x
+        // exposes the reader as a session UUID via MTX_READER_ID, with no
+        // env var carrying the actual client address for runOnRead. The
+        // hook used to fall back to passing the UUID through, which looked
+        // like garbage in the toast. The auth-failure toast still has a
+        // real IP because that comes from MediaMTX's log scraper, not the
+        // hook.
+        var body = $"{codec} · {width}×{height}";
         new ToastContentBuilder()
             .AddText($"{camera} is now being viewed")
             .AddText(body)

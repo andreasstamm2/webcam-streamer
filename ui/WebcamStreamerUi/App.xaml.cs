@@ -170,11 +170,13 @@ public partial class App : System.Windows.Application
                     _ = RefreshAsync();
                     break;
                 case "viewer-connected":
-                    _tray?.OnViewerConnected();
+                    // No tray bookkeeping here -- the supervisor pairs the
+                    // viewer event with a camera-state-changed (carrying
+                    // viewer_count) which already drives the tooltip via
+                    // CameraInfo PropertyChanged. Toasts still fire.
                     Toasts?.OnViewerConnected(ev.Data);
                     break;
                 case "viewer-disconnected":
-                    _tray?.OnViewerDisconnected();
                     // No toast for disconnect (per Q12.1).
                     break;
                 case "viewer-auth-failed":

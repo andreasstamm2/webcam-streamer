@@ -21,7 +21,9 @@ namespace WebcamStreamerUi;
 //   Exit                      (confirmation prompt -> Application.Current.Shutdown)
 //
 // Left-click on the icon opens the same menu (per Q9.1).
-// Tooltip is dynamic: "{enabled} of {total} cameras live, {viewers} viewers".
+// Tooltip is dynamic: "{enabled} of {total} cameras enabled, {viewers} viewers".
+// Both numbers derive from CameraInfo rows so the tooltip can never disagree
+// with the DataGrid status pill or the per-camera submenu.
 public sealed class TrayIcon : IDisposable
 {
     private readonly NotifyIcon         _icon;
@@ -30,8 +32,6 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem  _camerasItem;
     private readonly HostSettings       _settings;
     private readonly ObservableCollection<CameraInfo> _cameras;
-
-    private int _viewerCount;   // updated as viewer-connected/disconnected fire
 
     public event EventHandler? AdvancedSettingsClicked;
     public event EventHandler? SettingsClicked;
@@ -158,15 +158,18 @@ public sealed class TrayIcon : IDisposable
         if (_notifyToggle.Checked != enabled) _notifyToggle.Checked = enabled;
     }
 
-    public void OnViewerConnected()    { _viewerCount++; UpdateTooltip(); }
-    public void OnViewerDisconnected() { if (_viewerCount > 0) _viewerCount--; UpdateTooltip(); }
-
     private void UpdateTooltip()
     {
+        // Count plugged-in cameras, regardless of running state. "Enabled"
+        // reflects user intent: a re-enabled cam must show up in the
+        // numerator even if its publisher is mid-restart. The viewer total
+        // sums the supervisor's per-cam counts, so the tooltip can't drift
+        // from the DataGrid (no UI-side tally).
         int total   = _cameras.Count(c => c.Present);
-        int enabled = _cameras.Count(c => c.Present && c.Enabled && c.Running);
+        int enabled = _cameras.Count(c => c.Present && c.Enabled);
+        int viewers = _cameras.Sum(c => c.ViewerCount);
         // NotifyIcon.Text has a 127-character ceiling on modern Windows.
-        var s = $"WebcamStreamer\n{enabled} of {total} cameras live\n{_viewerCount} viewers";
+        var s = $"WebcamStreamer\n{enabled} of {total} cameras enabled\n{viewers} viewers";
         if (s.Length > 127) s = s.Substring(0, 127);
         _icon.Text = s;
     }

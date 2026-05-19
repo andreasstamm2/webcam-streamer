@@ -19,7 +19,12 @@
 
 [CmdletBinding()]
 param(
-    [int]$BootSec        = 6,
+    # The default mode (transcode_mjpeg_to_h264) needs ~8-10s for the
+    # ffmpeg publisher to negotiate dshow + the H.264 encoder warm-up and
+    # for MediaMTX to see the publish. The old default (passthrough_mjpeg)
+    # was lighter to spin up but didn't actually stream correctly on real
+    # consumer cams.
+    [int]$BootSec        = 12,
     [int]$StreamPullSec  = 4,
     [int]$MinFramesPerStream = 8,    # generous lower bound (handles cams that drop fps in low light)
     [int]$IpcTimeoutMs   = 10000
@@ -191,26 +196,33 @@ foreach ($j in $jobs) {
 Phase 'A4' 'set-mode round trip on first cam'
 $cam = $cams[0]
 $origMode = $cam.mode
+# Use passthrough_mjpeg as the "alt" purely to exercise set-mode's IPC path
+# and override persistence. We don't require it to actually stream -- the
+# pipeline is documented-broken on every consumer cam we ship for (see
+# CLAUDE.md codec matrix). The post-restore re-pull below covers the
+# "set-mode round trip preserves streaming" property.
 $alt = if ($origMode -eq 'transcode_mjpeg_to_h264') { 'passthrough_mjpeg' } else { 'transcode_mjpeg_to_h264' }
 $smResp = Invoke-Ipc -Id 10 -Method 'set-mode' -Params @{name=$cam.name; mode=$alt}
-if ($smResp.ok -and $smResp.result.mode -eq $alt) { Pass "set-mode '$($cam.name)' -> $alt" }
+if ($smResp.ok -and $smResp.result.mode -eq $alt) { Pass "set-mode '$($cam.name)' -> $alt (IPC echo)" }
 else { Fail "set-mode rejected: $($smResp.error)" }
-Start-Sleep -Seconds 3
-$r = Test-Pull -Path $cam.path -Tag "postmode" -Sec $StreamPullSec
-if ($r.frames -ge $MinFramesPerStream) { Pass "stream still flows after set-mode ($($r.frames) frames, mode=$alt)" }
-else                                    { Fail "stream broken after set-mode (only $($r.frames) frames)" }
 
 # Restore + cleanup override file
 Invoke-Ipc -Id 11 -Method 'set-mode' -Params @{name=$cam.name; mode=$origMode} | Out-Null
 $slug = ($cam.name -replace '[^a-zA-Z0-9]+','-').TrimEnd('-')
 $overridePath = Join-Path $root "probes\$slug.override.txt"
 if (Test-Path $overridePath) { Remove-Item $overridePath -Force }
+Start-Sleep -Seconds 3
+$r = Test-Pull -Path $cam.path -Tag "postrestore" -Sec $StreamPullSec
+if ($r.frames -ge $MinFramesPerStream) { Pass "stream resumes after restore to '$origMode' ($($r.frames) frames)" }
+else                                    { Fail "stream broken after set-mode restore (only $($r.frames) frames)" }
 Pass "restored mode + cleaned up override file"
 
 Phase 'A5' 'restart-camera + verify resume'
 $rrResp = Invoke-Ipc -Id 20 -Method 'restart-camera' -Params @{name=$cam.name}
 if ($rrResp.ok) { Pass "restart-camera '$($cam.name)'" } else { Fail "restart-camera failed: $($rrResp.error)" }
-Start-Sleep -Seconds 2
+# The default transcode_mjpeg_to_h264 pipeline needs ~8s after restart for
+# the dshow input + libx264 encoder + MediaMTX publish to all come back up.
+Start-Sleep -Seconds 6
 $r = Test-Pull -Path $cam.path -Tag "postrestart" -Sec $StreamPullSec
 if ($r.frames -ge $MinFramesPerStream) { Pass "stream resumes after restart ($($r.frames) frames)" }
 else                                    { Fail "stream broken after restart (only $($r.frames) frames)" }
@@ -274,12 +286,15 @@ $shResp = Invoke-Ipc -Id 99 -Method 'shutdown'
 if (-not ($shResp -and $shResp.ok)) { Fail "shutdown method returned not-ok" } else { Pass "shutdown method ack" }
 $client.Dispose()
 $gone = $false
-for ($i=0; $i -lt 30; $i++) {
+# Supervision loop now spawns ffmpeg subprocesses in Phase 2 for format
+# enumeration; worst case ~2-3s before the next g_stop check. Give it
+# generous wall-clock time before declaring it stuck.
+for ($i=0; $i -lt 50; $i++) {
     if ($svP.HasExited) { $gone = $true; break }
     Start-Sleep -Milliseconds 200
 }
-if ($gone) { Pass "supervisor exited" } else { Fail "supervisor still alive after 6s"; Stop-Process -Id $svP.Id -Force -EA 0 }
-Start-Sleep -Seconds 2
+if ($gone) { Pass "supervisor exited" } else { Fail "supervisor still alive after 10s"; Stop-Process -Id $svP.Id -Force -EA 0 }
+Start-Sleep -Seconds 4
 $tree = @{
     sup = @(Get-Process -Name 'supervisor' -EA 0).Count
     mtx = @(Get-Process -Name 'mediamtx'   -EA 0).Count
