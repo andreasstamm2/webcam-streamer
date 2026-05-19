@@ -10,10 +10,12 @@
 #include "strings.h"
 #include "camera_enum.h"
 #include "camera_config.h"
+#include "camera_formats.h"
 #include "camera_probe.h"
 #include "ipc_server.h"
 #include "settings.h"
 #include "events_pipe.h"
+#include "known_cameras.h"
 
 #include <windows.h>
 #include <winsock2.h>
@@ -110,6 +112,18 @@ struct CamSlot {
     bool                               last_running = false;  // for state-change events
     bool                               present      = true;   // false = unplugged; supervision skips restarts
     int                                viewer_count = 0;       // bumped by events-pipe runOnRead/Unread
+    // Filled once at discovery (initial enum + hot-add) via `ffmpeg
+    // -list_options`. Used by resolveCameraConfig to pick a working default
+    // and surfaced in CamToJson so the UI can populate per-cam Resolution
+    // dropdowns instead of a hardcoded list.
+    std::vector<AdvertisedFormat>      formats;
+    // Captured from `ffmpeg -list_devices` Alternative-name line. alt_name
+    // is the full DirectShow PnP path; vid_pid is "vvvv:pppp" lowercased
+    // hex (empty if not a USB device or extraction failed). Surfaced in
+    // CamToJson so the UI / users can identify cams when adding entries to
+    // config/known-cameras.json.
+    std::wstring                       alt_name;
+    std::string                        vid_pid;
 };
 
 // Start p now and update backoff bookkeeping. Never sleeps. Callers that
@@ -135,6 +149,18 @@ static void StartNoSleep(SupervisedProcess& p, Backoff& b) {
 
 // Build the JSON description of one camera slot. Caller must hold state_mutex.
 static json CamToJson(const CamSlot& s) {
+    json formats = json::array();
+    for (const auto& f : s.formats) {
+        formats.push_back({
+            {"kind",    f.kind},
+            {"codec",   f.codec},
+            {"pix_fmt", f.pix_fmt},
+            {"width",   f.width},
+            {"height",  f.height},
+            {"min_fps", f.min_fps},
+            {"max_fps", f.max_fps},
+        });
+    }
     return {
         {"name",     WideToUtf8(s.cfg.friendly_name)},
         {"path",     WideToUtf8(s.cfg.rtsp_path)},
@@ -148,7 +174,79 @@ static json CamToJson(const CamSlot& s) {
         {"pid",      s.proc ? (uint32_t)s.proc->Pid() : 0},
         {"restarts", s.backoff.restarts},
         {"viewer_count", s.viewer_count},
+        {"advertised_formats", formats},
+        {"alt_name", WideToUtf8(s.alt_name)},
+        {"vid_pid",  s.vid_pid},
     };
+}
+
+// Pick a (mode, width, height) tuple that the camera actually advertises.
+// Preferred path: MJPEG-source -> transcode_mjpeg_to_h264 (the v0.2.1
+// universal-fallback default), since virtually every modern USB cam exposes
+// MJPEG. If no MJPEG is offered, fall back to transcode_raw_to_h264 with the
+// largest advertised raw resolution (capped at the preferred target). If we
+// couldn't enumerate formats at all (the rare case), keep the preferred
+// defaults so a brand-new cam still tries to publish rather than silently
+// failing.
+//
+// Preferred resolution is **640x480**. The supervisor mostly powers monitoring
+// use cases; 480p is more than enough, halves bandwidth vs. 720p, and is
+// almost universally advertised by USB webcams. Users who want higher res
+// pick it explicitly from the per-cam dropdown (or set an override file).
+struct DefaultPick {
+    Mode mode;
+    int  width;
+    int  height;
+    int  fps;
+};
+static DefaultPick PickDefaultFromFormats(const std::vector<AdvertisedFormat>& formats) {
+    constexpr int kPrefW = 640, kPrefH = 480;
+    DefaultPick d{ Mode::TranscodeMjpegToH264, kPrefW, kPrefH, 30 };
+    if (formats.empty()) return d;
+
+    auto pickBest = [&](auto pred) -> std::optional<AdvertisedFormat> {
+        // Pick exact 1280x720 if advertised; else the largest matching
+        // resolution at or below 1280x720; else the largest one full stop.
+        const AdvertisedFormat* exact   = nullptr;
+        const AdvertisedFormat* leSized = nullptr;
+        const AdvertisedFormat* largest = nullptr;
+        for (const auto& f : formats) {
+            if (!pred(f)) continue;
+            if (f.width == kPrefW && f.height == kPrefH) { exact = &f; break; }
+            if (f.width <= kPrefW && f.height <= kPrefH) {
+                if (!leSized || (int64_t)f.width*f.height > (int64_t)leSized->width*leSized->height) {
+                    leSized = &f;
+                }
+            }
+            if (!largest || (int64_t)f.width*f.height > (int64_t)largest->width*largest->height) {
+                largest = &f;
+            }
+        }
+        if (exact)   return *exact;
+        if (leSized) return *leSized;
+        if (largest) return *largest;
+        return std::nullopt;
+    };
+
+    if (auto m = pickBest([](const AdvertisedFormat& f) {
+            return f.kind == "compressed" && f.codec == "mjpeg";
+        })) {
+        d.mode   = Mode::TranscodeMjpegToH264;
+        d.width  = m->width;
+        d.height = m->height;
+        d.fps    = (m->max_fps > 0) ? (int)std::min(30.0, m->max_fps) : 30;
+        return d;
+    }
+    if (auto m = pickBest([](const AdvertisedFormat& f) { return f.kind == "raw"; })) {
+        d.mode   = Mode::TranscodeRawToH264;
+        d.width  = m->width;
+        d.height = m->height;
+        d.fps    = (m->max_fps > 0) ? (int)std::min(30.0, m->max_fps) : 30;
+        return d;
+    }
+    // No usable format found -- keep defaults; the publisher will fail to
+    // start and the supervision loop will hold off with backoff.
+    return d;
 }
 
 // All camera slots as a JSON array (used by list-cameras, get-status, and
@@ -260,55 +358,97 @@ int wmain() {
     Info("settings: default_enabled_for_new_cameras=" +
          std::string(settings.default_enabled_for_new_cameras ? "true" : "false"));
 
+    // Bundled DB of known-good profiles by USB vid:pid. Missing file =
+    // empty DB; the fallback path (advertised-format smart pick) still
+    // works. The supervisor only uses this when a freshly-discovered cam
+    // has no user override file.
+    KnownCameraDb knownDb;
+    knownDb.Load(root / "config" / "known-cameras.json");
+
     Info("enumerating cameras...");
     auto cams = EnumerateCameras(ffExe);
     if (cams.empty()) {
         Error("no cameras detected by ffmpeg dshow enumeration");
         return 3;
     }
+    for (const auto& d : cams) {
+        // Log device identity so users can populate config/known-cameras.json
+        // for cams they ship to others. vid_pid is empty for non-USB or
+        // unrecognised PnP paths -- not an error.
+        Info("cam '" + WideToUtf8(d.friendly_name) +
+             "' vid_pid='" + d.vid_pid + "'" +
+             (d.alt_name.empty() ? "" : " alt_name='" + WideToUtf8(d.alt_name) + "'"));
+    }
 
-    // Resolve full per-cam config from override file > probe recommendation > defaults.
-    auto resolveCameraConfig = [&](std::wstring_view name, CameraConfig& cc) {
+    // Resolve full per-cam config. Priority:
+    //   1. Override file (user explicitly picked this -- always wins).
+    //   2. Known-cameras DB matched by USB vid:pid (we ship a known-good
+    //      profile for this hardware).
+    //   3. Format-based smart pick from `ffmpeg -list_options` (anything
+    //      the cam actually advertises).
+    //   4. CameraConfig defaults (transcode_mjpeg_to_h264 @ 640x480@30).
+    // Probe-summary recommendations are deliberately ignored -- the
+    // probe-camera.ps1 frame-count check has documented false positives
+    // (CLAUDE.md codec matrix).
+    auto resolveCameraConfig = [&](std::wstring_view                    name,
+                                    const std::string&                   vid_pid,
+                                    const std::vector<AdvertisedFormat>& formats,
+                                    CameraConfig&                       cc) {
         auto ov = LoadOverride(probesDir, name);
+        auto known = !vid_pid.empty() ? knownDb.Lookup(vid_pid) : std::nullopt;
+        DefaultPick smart = PickDefaultFromFormats(formats);
 
-        // Mode resolution policy (changed in v0.2.1): user override wins;
-        // on everything else we use transcode_mjpeg_to_h264 unconditionally.
-        // We deliberately IGNORE the probe-summary recommendation because
-        // probe-camera.ps1's frame-count check has known false positives
-        // (HP 5MP passthrough MJPEG: probe says ok=true, decoder gets only
-        // the top of every frame -- see CLAUDE.md codec matrix). Until the
-        // probe gains a visual-integrity check, transcode_mjpeg_to_h264 is
-        // the only pipeline confirmed working across all cams we ship for.
-        if (ov && ov->mode) cc.mode = *ov->mode;
-        else                cc.mode = Mode::TranscodeMjpegToH264;
+        // Choose per-field with explicit fallthrough so a partial override
+        // file can leave some fields to the DB / smart pick.
+        if (ov && ov->mode)       cc.mode = *ov->mode;
+        else if (known)           cc.mode = known->mode;
+        else                      cc.mode = smart.mode;
 
-        // Resolution / fps overrides (rare; HP-RAW@640x480 is the canonical case).
-        if (ov) {
-            if (ov->width)  cc.width  = *ov->width;
-            if (ov->height) cc.height = *ov->height;
-            if (ov->fps)    cc.fps    = *ov->fps;
+        cc.width  = (ov && ov->width)  ? *ov->width
+                    : (known ? known->width  : smart.width);
+        cc.height = (ov && ov->height) ? *ov->height
+                    : (known ? known->height : smart.height);
+        cc.fps    = (ov && ov->fps)    ? *ov->fps
+                    : (known ? known->fps    : smart.fps);
+
+        if (known) {
+            Info("cam '" + WideToUtf8(name) + "' matched known-cameras DB entry '" +
+                 vid_pid + "' (" + known->label + ")");
         }
 
-        // Enabled flag: override beats settings.json default (which beats
-        // the CameraConfig built-in default of true). A camera with no
-        // override file and no settings.json gets enabled=true (matches
-        // pre-Slice-A behaviour).
+        // Enabled flag: override beats settings.json default. A camera with
+        // no override file and no settings.json gets enabled=true.
         if (ov && ov->enabled) cc.enabled = *ov->enabled;
         else                   cc.enabled = settings.default_enabled_for_new_cameras;
     };
 
+    // Enumerate advertised formats once per cam at startup. Each call is
+    // ~1s so the loop adds 1-3s to startup -- acceptable since the
+    // alternative is a hard-coded default that may not match the cam.
+    // The format lists are stored on each CamSlot below and re-surfaced
+    // every time list-cameras runs (no need to re-enumerate later).
+    std::vector<std::vector<AdvertisedFormat>> formatsPerCam;
+    formatsPerCam.reserve(cams.size());
+    for (const auto& d : cams) {
+        formatsPerCam.push_back(EnumerateFormats(ffExe, d.friendly_name));
+    }
+
     std::vector<CameraConfig> camConfigs;
-    int idx = 0;
-    for (const auto& name : cams) {
-        CameraConfig cc;
-        cc.friendly_name = name;
-        cc.rtsp_path     = L"/webcam" + std::to_wstring(idx++);
-        resolveCameraConfig(name, cc);
-        Info("cam '" + WideToUtf8(name) + "' -> path " + WideToUtf8(cc.rtsp_path) +
-             " mode=" + ModeName(cc.mode) +
-             " " + std::to_string(cc.width) + "x" + std::to_string(cc.height) +
-             "@" + std::to_string(cc.fps));
-        camConfigs.push_back(std::move(cc));
+    {
+        int idx = 0;
+        for (size_t i = 0; i < cams.size(); ++i) {
+            CameraConfig cc;
+            cc.friendly_name = cams[i].friendly_name;
+            cc.rtsp_path     = L"/webcam" + std::to_wstring(idx++);
+            resolveCameraConfig(cams[i].friendly_name, cams[i].vid_pid,
+                                formatsPerCam[i], cc);
+            Info("cam '" + WideToUtf8(cams[i].friendly_name) + "' -> path " +
+                 WideToUtf8(cc.rtsp_path) +
+                 " mode=" + ModeName(cc.mode) +
+                 " " + std::to_string(cc.width) + "x" + std::to_string(cc.height) +
+                 "@" + std::to_string(cc.fps));
+            camConfigs.push_back(std::move(cc));
+        }
     }
 
     JobObject job;
@@ -362,11 +502,14 @@ int wmain() {
 
     std::vector<CamSlot> slots;
     slots.reserve(camConfigs.size());
-    for (auto& cc : camConfigs) {
+    for (size_t i = 0; i < camConfigs.size(); ++i) {
         CamSlot s;
-        s.cfg  = cc;
-        s.proc = std::make_unique<SupervisedProcess>(
-                     MakeFFmpegProcessConfig(ffExe, cc, publisher), job);
+        s.cfg      = camConfigs[i];
+        s.formats  = formatsPerCam[i];
+        s.alt_name = cams[i].alt_name;
+        s.vid_pid  = cams[i].vid_pid;
+        s.proc     = std::make_unique<SupervisedProcess>(
+                         MakeFFmpegProcessConfig(ffExe, camConfigs[i], publisher), job);
         slots.push_back(std::move(s));
     }
     // Only start the ffmpeg publishers for ENABLED cameras. Disabled cams
@@ -777,63 +920,97 @@ int wmain() {
         }
 
         // Phase 2: periodic re-enumeration for plug/unplug detection.
-        // EnumerateCameras spawns ffmpeg as a subprocess (~1s); we run it
-        // WITHOUT state_mutex held so IPC handlers stay responsive. Apply
-        // the diffs in a short re-locked section.
+        // EnumerateCameras + EnumerateFormats both spawn ffmpeg as a
+        // subprocess (~1s each); we run them WITHOUT state_mutex held so
+        // IPC handlers stay responsive even when a new cam is being
+        // discovered. Mutations to `slots` happen in short re-locked
+        // sections at the start (presence diffs) and end (appending new
+        // cams with their freshly-enumerated formats).
         auto now = std::chrono::steady_clock::now();
         if (now - lastEnum > 10s) {
             lastEnum = now;
             auto current = EnumerateCameras(ffExe);   // unlocked; ~1s
 
-            std::lock_guard<std::mutex> g(state_mutex);
-            std::set<std::wstring> currentSet(current.begin(), current.end());
-            std::set<std::wstring> knownSet;
-            for (auto& s : slots) knownSet.insert(s.cfg.friendly_name);
+            // Step 1: presence diff + collect new-device list. Short lock.
+            std::vector<CameraDevice> newDevices;
+            bool                      listChanged = false;
+            {
+                std::lock_guard<std::mutex> g(state_mutex);
+                std::set<std::wstring> currentSet;
+                for (auto& d : current) currentSet.insert(d.friendly_name);
+                std::set<std::wstring> knownSet;
+                for (auto& s : slots) knownSet.insert(s.cfg.friendly_name);
 
-            bool listChanged = false;
+                for (auto& s : slots) {
+                    bool isPresent = currentSet.count(s.cfg.friendly_name) > 0;
+                    if (s.present && !isPresent) {
+                        Info("camera disappeared: " + WideToUtf8(s.cfg.friendly_name));
+                        s.present = false;
+                        s.proc->Stop();
+                        listChanged = true;
+                    } else if (!s.present && isPresent) {
+                        Info("camera reappeared: " + WideToUtf8(s.cfg.friendly_name));
+                        s.present = true;
+                        if (s.cfg.enabled) {
+                            rebuildSlot(s);
+                            StartNoSleep(*s.proc, s.backoff);
+                        } else {
+                            Info("  (kept disabled per user setting)");
+                        }
+                        listChanged = true;
+                    }
+                }
 
-            for (auto& s : slots) {
-                bool isPresent = currentSet.count(s.cfg.friendly_name) > 0;
-                if (s.present && !isPresent) {
-                    Info("camera disappeared: " + WideToUtf8(s.cfg.friendly_name));
-                    s.present = false;
-                    s.proc->Stop();
-                    listChanged = true;
-                } else if (!s.present && isPresent) {
-                    Info("camera reappeared: " + WideToUtf8(s.cfg.friendly_name));
+                for (auto& d : current) {
+                    if (!knownSet.count(d.friendly_name)) newDevices.push_back(d);
+                }
+            }
+
+            // Step 2: enumerate formats for brand-new cams. Unlocked --
+            // takes ~1s per cam; we'd block every IPC call if this ran
+            // under state_mutex.
+            std::vector<std::vector<AdvertisedFormat>> newFormats;
+            newFormats.reserve(newDevices.size());
+            for (auto& d : newDevices) {
+                newFormats.push_back(EnumerateFormats(ffExe, d.friendly_name));
+            }
+
+            // Step 3: re-acquire lock, append new slots. Re-check knownSet
+            // in case the unlocked window let another path add slots (the
+            // IPC handlers can't add cams today, but defensive).
+            if (!newDevices.empty() || listChanged) {
+                std::lock_guard<std::mutex> g(state_mutex);
+                std::set<std::wstring> knownSet;
+                for (auto& s : slots) knownSet.insert(s.cfg.friendly_name);
+
+                for (size_t i = 0; i < newDevices.size(); ++i) {
+                    const auto& d = newDevices[i];
+                    if (knownSet.count(d.friendly_name)) continue;
+                    CamSlot s;
+                    s.cfg.friendly_name = d.friendly_name;
+                    s.cfg.rtsp_path     = allocPath();
+                    s.formats           = newFormats[i];
+                    s.alt_name          = d.alt_name;
+                    s.vid_pid           = d.vid_pid;
+                    resolveCameraConfig(d.friendly_name, d.vid_pid, s.formats, s.cfg);
                     s.present = true;
-                    if (s.cfg.enabled) {
-                        rebuildSlot(s);
-                        StartNoSleep(*s.proc, s.backoff);
-                    } else {
-                        Info("  (kept disabled per user setting)");
+                    Info("camera added: " + WideToUtf8(d.friendly_name) +
+                         " vid_pid='" + d.vid_pid + "' -> path " +
+                         WideToUtf8(s.cfg.rtsp_path) + " mode=" + ModeName(s.cfg.mode) +
+                         " " + std::to_string(s.cfg.width) + "x" + std::to_string(s.cfg.height) +
+                         "@" + std::to_string(s.cfg.fps) +
+                         " enabled=" + (s.cfg.enabled ? "true" : "false"));
+                    s.proc = std::make_unique<SupervisedProcess>(
+                                 MakeFFmpegProcessConfig(ffExe, s.cfg, publisher), job);
+                    slots.push_back(std::move(s));
+                    if (slots.back().cfg.enabled) {
+                        StartNoSleep(*slots.back().proc, slots.back().backoff);
                     }
                     listChanged = true;
                 }
-            }
 
-            for (auto& name : current) {
-                if (knownSet.count(name)) continue;
-                CamSlot s;
-                s.cfg.friendly_name = name;
-                s.cfg.rtsp_path     = allocPath();
-                resolveCameraConfig(name, s.cfg);
-                s.present = true;
-                Info("camera added: " + WideToUtf8(name) + " -> path " +
-                     WideToUtf8(s.cfg.rtsp_path) + " mode=" + ModeName(s.cfg.mode) +
-                     " " + std::to_string(s.cfg.width) + "x" + std::to_string(s.cfg.height) +
-                     "@" + std::to_string(s.cfg.fps) +
-                     " enabled=" + (s.cfg.enabled ? "true" : "false"));
-                s.proc = std::make_unique<SupervisedProcess>(
-                             MakeFFmpegProcessConfig(ffExe, s.cfg, publisher), job);
-                slots.push_back(std::move(s));
-                if (s.cfg.enabled) {
-                    StartNoSleep(*slots.back().proc, slots.back().backoff);
-                }
-                listChanged = true;
+                if (listChanged) ipc.PublishEvent("cameras-changed", AllCamsJson(slots));
             }
-
-            if (listChanged) ipc.PublishEvent("cameras-changed", AllCamsJson(slots));
         }
     }
 

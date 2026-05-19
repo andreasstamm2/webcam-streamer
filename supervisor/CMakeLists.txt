@@ -18,7 +18,9 @@ add_executable(supervisor
     src/run_command.cpp
     src/camera_enum.cpp
     src/camera_config.cpp
+    src/camera_formats.cpp
     src/camera_probe.cpp
+    src/known_cameras.cpp
     src/ipc_server.cpp
     src/settings.cpp
     src/events_pipe.cpp

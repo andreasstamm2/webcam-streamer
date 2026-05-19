@@ -19,9 +19,13 @@ Mode        ModeFromString(std::string_view s);
 struct CameraConfig {
     std::wstring friendly_name;   // e.g. "Logitech BRIO"
     std::wstring rtsp_path;       // e.g. "/webcam0"
-    Mode         mode = Mode::PassthroughMjpeg;
-    int          width = 1280;
-    int          height = 720;
+    Mode         mode = Mode::TranscodeMjpegToH264;
+    // Default to 480p: more than enough for monitoring use cases and
+    // almost universally advertised by consumer USB cams. The supervisor's
+    // PickDefaultFromFormats prefers this exact resolution; this struct
+    // default is the floor for the rare "couldn't enumerate at all" path.
+    int          width  = 640;
+    int          height = 480;
     // MJPEG passthrough at 30fps is bursty (~30-50 Mbps). ffplay struggles to
     // drain TCP-interleaved RTP that fast; MediaMTX drops the tail of each
     // frame -> green bottom. 15fps halves the bandwidth and tracks well.

@@ -131,6 +131,12 @@ Source: "{#FfmpegDir}\ffprobe.exe"; DestDir: "{app}\third_party\ffmpeg"; Flags: 
 ; --- MediaMTX runtime config ---
 Source: "{#ConfigDir}\mediamtx.yml"; DestDir: "{app}\config"; Flags: ignoreversion
 
+; --- Known-camera DB (USB vid:pid -> mode/resolution). Empty by default;
+; users (or future installer builds) add entries. Supervisor falls back to
+; format-based smart pick if a cam isn't in the DB, so a missing/empty
+; file isn't an error. ---
+Source: "{#ConfigDir}\known-cameras.json"; DestDir: "{app}\config"; Flags: ignoreversion
+
 ; --- Legal text shipped with the install ---
 Source: "{#RepoRoot}\LICENSE";               DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion

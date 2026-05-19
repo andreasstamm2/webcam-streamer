@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Known-good defaults for camera models we've personally tested.",
+    "Keyed by USB 'vendor:product' (lowercased 4-digit hex). The supervisor",
+    "uses this when discovering a cam that has no user override file --",
+    "matching gets you the documented-working config without depending on",
+    "the runtime `ffmpeg -list_options` smart-pick.",
+    "",
+    "To add a new entry: plug the cam in, look at supervisor stdout for a",
+    "line like `cam '<name>' alt_name='@device_pnp_...' vid_pid='vvvv:pppp'`",
+    "and add an entry below. 'mode' must be one of:",
+    "  passthrough_mjpeg, passthrough_h264, transcode_mjpeg_to_h264,",
+    "  transcode_raw_to_h264, transcode_raw_to_mjpeg",
+    "",
+    "User overrides (probes/<slug>.override.txt) ALWAYS beat this DB.",
+    "If the DB has no entry for a cam, the supervisor falls back to a",
+    "format-based smart-pick from `ffmpeg -list_options`."
+  ],
+  "cameras": {
+    "30c9:00c1": {
+      "label": "Chicony HP 5MP integrated webcam (laptop module)",
+      "mode":   "transcode_mjpeg_to_h264",
+      "width":  640,
+      "height": 480,
+      "fps":    30
+    }
+  }
+}

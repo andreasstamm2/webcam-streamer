@@ -9,6 +9,12 @@
         UseLayoutRounding="True">
 
     <Window.Resources>
+        <!-- Substitutes the static Resolutions.All list when the per-cam
+             AvailableResolutions is empty (supervisor hasn't enumerated
+             formats yet, or running against an older supervisor that
+             doesn't emit advertised_formats). -->
+        <local:ResolutionFallbackConverter x:Key="ResolutionFallback"/>
+
         <!-- Color tokens -->
         <SolidColorBrush x:Key="bgPanel"      Color="#FFFFFF"/>
         <SolidColorBrush x:Key="bgChrome"     Color="#FFFFFF"/>
@@ -207,11 +213,19 @@
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
-                <!-- Resolution dropdown -->
+                <!-- Resolution dropdown. Bound to the per-cam
+                     AvailableResolutions (derived from the supervisor's
+                     `ffmpeg -list_options` enumeration filtered by the
+                     currently-selected Mode), so the user only sees
+                     resolutions the cam actually advertises and ffmpeg
+                     will accept. If we don't yet have advertised formats
+                     (supervisor still enumerating, or older supervisor),
+                     ResolutionFallbackConverter substitutes the static
+                     Resolutions.All list. -->
                 <DataGridTemplateColumn Header="Resolution" Width="115">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <ComboBox ItemsSource="{x:Static local:Resolutions.All}"
+                            <ComboBox ItemsSource="{Binding AvailableResolutions, Converter={StaticResource ResolutionFallback}}"
                                       SelectedItem="{Binding Resolution, Mode=OneWay}"
                                       SelectionChanged="ResolutionCombo_SelectionChanged"
                                       Tag="{Binding}"

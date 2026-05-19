@@ -1,8 +1,16 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace WebcamStreamerUi;
+
+// One advertised input format from the supervisor's ffmpeg -list_options
+// enumeration. Either Codec (when Kind == "compressed", e.g. "mjpeg") or
+// PixFmt (when Kind == "raw", e.g. "yuyv422") is set.
+public sealed record AdvertisedFormat(string Kind, string Codec, string PixFmt,
+                                       int Width, int Height,
+                                       double MinFps, double MaxFps);
 
 // One row in the camera DataGrid. Implements INotifyPropertyChanged so
 // live updates from camera-state-changed events flow into the UI.
@@ -21,6 +29,7 @@ public sealed class CameraInfo : INotifyPropertyChanged
     private uint   _pid;
     private int    _restarts;
     private int    _viewerCount;
+    private List<AdvertisedFormat> _advertisedFormats = new();
 
     public string Name        { get => _name;        set => Set(ref _name,        value); }
     public string Path        { get => _path;        set => Set(ref _path,        value); }
@@ -36,10 +45,53 @@ public sealed class CameraInfo : INotifyPropertyChanged
     public int    Restarts    { get => _restarts;    set => Set(ref _restarts,    value); }
     public int    ViewerCount { get => _viewerCount; set => Set(ref _viewerCount, value); }
 
+    // All formats this cam advertises via DirectShow, as reported by the
+    // supervisor's `ffmpeg -list_options` at discovery time. Drives the
+    // per-cam Resolution dropdown (filtered by current Mode below).
+    public IReadOnlyList<AdvertisedFormat> AdvertisedFormats => _advertisedFormats;
+
     // Drives the STREAMING vs. ENABLED distinction in the status pill. XAML
     // MultiDataTrigger can't compare integers, so we expose a bool the
     // bindings can consume directly.
     public bool   HasViewers  => _viewerCount > 0;
+
+    // Resolutions the cam actually advertises for whichever input format
+    // the currently-selected Mode uses. Empty when we don't yet have
+    // advertised_formats (e.g. supervisor still enumerating); the UI falls
+    // back to the static Resolutions.All list in that case.
+    //
+    // Mapping (must stay in lockstep with camera_config.cpp::BuildFFmpegArgs
+    // and probe-camera.ps1):
+    //   passthrough_mjpeg, transcode_mjpeg_to_h264 -> need compressed/mjpeg
+    //   passthrough_h264                            -> need compressed/h264
+    //   transcode_raw_to_h264, transcode_raw_to_mjpeg -> need raw
+    public IReadOnlyList<string> AvailableResolutions
+    {
+        get
+        {
+            if (_advertisedFormats.Count == 0) return Array.Empty<string>();
+            string mode = _mode ?? "";
+            Func<AdvertisedFormat, bool> pred = mode switch
+            {
+                "passthrough_mjpeg"        => f => f.Kind == "compressed" && f.Codec == "mjpeg",
+                "transcode_mjpeg_to_h264"  => f => f.Kind == "compressed" && f.Codec == "mjpeg",
+                "passthrough_h264"         => f => f.Kind == "compressed" && f.Codec == "h264",
+                "transcode_raw_to_h264"    => f => f.Kind == "raw",
+                "transcode_raw_to_mjpeg"   => f => f.Kind == "raw",
+                _                          => _ => true,   // unknown: show everything
+            };
+            return _advertisedFormats
+                .Where(pred)
+                .Select(f => $"{f.Width}x{f.Height}")
+                .Distinct()
+                .OrderBy(s =>
+                {
+                    var parts = s.Split('x');
+                    return int.Parse(parts[0]) * 10000 + int.Parse(parts[1]);
+                })
+                .ToList();
+        }
+    }
 
     public string FullUrl => $"rtsp://viewer:viewer@127.0.0.1:8554{_path}";
 
@@ -52,6 +104,9 @@ public sealed class CameraInfo : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
         if (prop == nameof(Path))        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
         if (prop == nameof(ViewerCount)) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasViewers)));
+        // Changing the Mode changes which advertised formats are eligible
+        // for the Resolution dropdown -- re-raise so the combo refreshes.
+        if (prop == nameof(Mode))        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableResolutions)));
         return true;
     }
 
@@ -69,5 +124,35 @@ public sealed class CameraInfo : INotifyPropertyChanged
         if (el.TryGetProperty("pid",          out var pi)) Pid         = pi.GetUInt32();
         if (el.TryGetProperty("restarts",     out var rs)) Restarts    = rs.GetInt32();
         if (el.TryGetProperty("viewer_count", out var vc)) ViewerCount = vc.GetInt32();
+        if (el.TryGetProperty("advertised_formats", out var af) && af.ValueKind == JsonValueKind.Array)
+        {
+            var parsed = new List<AdvertisedFormat>(af.GetArrayLength());
+            foreach (var item in af.EnumerateArray())
+            {
+                parsed.Add(new AdvertisedFormat(
+                    Kind:   item.TryGetProperty("kind",    out var k)  ? (k.GetString() ?? "") : "",
+                    Codec:  item.TryGetProperty("codec",   out var c)  ? (c.GetString() ?? "") : "",
+                    PixFmt: item.TryGetProperty("pix_fmt", out var pf) ? (pf.GetString() ?? "") : "",
+                    Width:  item.TryGetProperty("width",   out var fw) ? fw.GetInt32() : 0,
+                    Height: item.TryGetProperty("height",  out var fh) ? fh.GetInt32() : 0,
+                    MinFps: item.TryGetProperty("min_fps", out var mn) ? mn.GetDouble() : 0,
+                    MaxFps: item.TryGetProperty("max_fps", out var mx) ? mx.GetDouble() : 0));
+            }
+            // Only replace + signal if the list actually changed; avoids
+            // tearing the bound dropdown on every list-cameras refresh.
+            if (!FormatListsEqual(_advertisedFormats, parsed))
+            {
+                _advertisedFormats = parsed;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AdvertisedFormats)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableResolutions)));
+            }
+        }
+    }
+
+    private static bool FormatListsEqual(IReadOnlyList<AdvertisedFormat> a, IReadOnlyList<AdvertisedFormat> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++) if (!Equals(a[i], b[i])) return false;
+        return true;
     }
 }
