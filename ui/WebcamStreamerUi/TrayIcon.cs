@@ -34,7 +34,6 @@ public sealed class TrayIcon : IDisposable
     private readonly ObservableCollection<CameraInfo> _cameras;
 
     public event EventHandler? AdvancedSettingsClicked;
-    public event EventHandler? SettingsClicked;
     public event EventHandler? AboutClicked;
     public event EventHandler<bool>? NotificationsToggled;     // arg = new state
     public event EventHandler<(string CameraName, bool Enabled)>? CameraEnableChanged;
@@ -67,10 +66,10 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(_camerasItem);
         _menu.Items.Add(new ToolStripSeparator());
 
-        var settingsItem = new ToolStripMenuItem("Settings...");
-        settingsItem.Click += (_, _) => SettingsClicked?.Invoke(this, EventArgs.Empty);
-        _menu.Items.Add(settingsItem);
-
+        // "Settings..." was retired in v0.3.1: the same settings are
+        // available in the collapsible "Settings" section of the main
+        // window, which "Advanced Settings..." opens. One entry point
+        // is enough.
         var advanced = new ToolStripMenuItem("Advanced Settings...");
         advanced.Click += (_, _) => AdvancedSettingsClicked?.Invoke(this, EventArgs.Empty);
         _menu.Items.Add(advanced);
@@ -96,7 +95,7 @@ public sealed class TrayIcon : IDisposable
 
         _icon = new NotifyIcon
         {
-            Icon              = SystemIcons.Application,   // placeholder; installer can ship a real icon
+            Icon              = LoadAppIcon(),
             ContextMenuStrip  = _menu,
             Visible           = true,
             Text              = "WebcamStreamer",
@@ -179,6 +178,27 @@ public sealed class TrayIcon : IDisposable
         _icon.Visible = false;
         _icon.Dispose();
         _menu.Dispose();
+    }
+
+    // Load app.ico from the embedded WPF resource. Falls back to the
+    // generic system icon if the resource isn't available (e.g. someone
+    // ran the bare DLL without the .ico bundled). The icon object is
+    // small enough that we don't worry about lifetimes -- it lives as
+    // long as the NotifyIcon does.
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            var info = System.Windows.Application.GetResourceStream(
+                new Uri("/app.ico", UriKind.Relative));
+            if (info != null)
+            {
+                using var s = info.Stream;
+                return new Icon(s);
+            }
+        }
+        catch { /* fall through */ }
+        return SystemIcons.Application;
     }
 }
 

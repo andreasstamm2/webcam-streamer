@@ -21,12 +21,25 @@
          so this value is just the fallback for local `dotnet run` /
          `dotnet build`. Keep it in sync with the next planned release so
          devs running the bare exe don't see a stale About box. -->
-    <Version>0.2.1</Version>
+    <Version>0.3.1</Version>
     <Authors>Andreas Stamm</Authors>
     <Company>Andreas Stamm</Company>
     <Product>Webcam Streamer</Product>
     <Copyright>Copyright (c) 2026 Andreas Stamm</Copyright>
+    <!-- Embed the multi-resolution app icon into the exe. Drives the
+         Explorer thumbnail, taskbar entry (before WPF takes over), and
+         the installer's Programs-and-Features icon (setup.iss
+         UninstallDisplayIcon points at the exe). -->
+    <ApplicationIcon>..\..\assets\icons\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same icon, but also exposed as a WPF resource so MainWindow /
+         AboutWindow / NotifyIcon can load it via the pack URI scheme
+         (Application.GetResourceStream("/app.ico")). <Link> gives it a
+         stable in-assembly path regardless of where the source sits. -->
+    <Resource Include="..\..\assets\icons\app.ico" Link="app.ico"/>
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Archived but stable wrapper over the Windows toast XML APIs.

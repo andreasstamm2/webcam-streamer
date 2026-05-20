@@ -8,7 +8,8 @@
         ShowInTaskbar="False"
         Background="#F5F7FA"
         FontFamily="Segoe UI" FontSize="13"
-        Foreground="#1F2937">
+        Foreground="#1F2937"
+        Icon="/app.ico">
     <!--
         Read-only "About" dialog. Reached from:
           - Tray menu → "About..."
@@ -19,11 +20,9 @@
         hyperlinks open in the default browser / mail client via
         Process.Start with UseShellExecute=true.
 
-        The icon block at the top is a PLACEHOLDER. To swap in a real
-        graphic, replace the Border below with:
-            <Image Width="64" Height="64"
-                   Source="pack://application:,,,/Resources/app-icon.png"/>
-        and add the PNG (or ICO) to the project as Resource.
+        Window.Icon supplies the chrome icon (top-left + taskbar). The
+        large in-content icon below uses the same .ico via the pack URI
+        registered in the csproj.
     -->
     <Grid Margin="22,18,22,16">
         <Grid.RowDefinitions>
@@ -36,16 +35,8 @@
 
         <!-- Row 0: icon + product name + version, in a single horizontal block -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,16">
-            <!-- Icon placeholder. 64x64 rounded block with a webcam glyph.
-                 Replace with a real <Image> once an icon asset exists. -->
-            <Border Width="64" Height="64" CornerRadius="8"
-                    Background="#1D4ED8" VerticalAlignment="Top">
-                <TextBlock Text="📷"
-                           FontSize="36"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Foreground="White"/>
-            </Border>
+            <Image Width="64" Height="64" Source="/app.ico"
+                   VerticalAlignment="Top"/>
 
             <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                 <TextBlock Text="Webcam Streamer"

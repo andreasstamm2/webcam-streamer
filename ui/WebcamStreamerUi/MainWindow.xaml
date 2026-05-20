@@ -6,7 +6,8 @@
         Height="600" Width="1240"
         Background="#F5F7FA" Foreground="#1F2937"
         FontFamily="Segoe UI" FontSize="13"
-        UseLayoutRounding="True">
+        UseLayoutRounding="True"
+        Icon="/app.ico">
 
     <Window.Resources>
         <!-- Substitutes the static Resolutions.All list when the per-cam

@@ -111,11 +111,6 @@ public partial class App : System.Windows.Application
         // --- tray icon ---
         _tray = new TrayIcon(Settings, Vm.Cameras);
         _tray.AdvancedSettingsClicked += (_, _) => ShowMainWindow();
-        // The standalone Settings dialog was retired in v0.3 -- the same
-        // toggles live in a collapsible section in the main window.
-        // Tray "Settings..." now opens the main window directly so the
-        // user lands on the right surface immediately.
-        _tray.SettingsClicked         += (_, _) => ShowMainWindow();
         _tray.AboutClicked            += (_, _) => ShowAboutWindow();
         _tray.NotificationsToggled    += async (_, on) =>
         {
