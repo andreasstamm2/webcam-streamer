@@ -21,7 +21,7 @@
          so this value is just the fallback for local `dotnet run` /
          `dotnet build`. Keep it in sync with the next planned release so
          devs running the bare exe don't see a stale About box. -->
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <Authors>Andreas Stamm</Authors>
     <Company>Andreas Stamm</Company>
     <Product>Webcam Streamer</Product>

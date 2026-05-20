@@ -198,24 +198,50 @@ Type: files;          Name: "{app}\settings.json"
 Type: files;          Name: "{app}\mediamtx.runtime.yml"
 
 [Code]
-// 8-char credential generator using Inno Setup's Pascal Random. Charset
-// is the RFC 3986 unreserved subset so the value can sit verbatim in a
-// rtsp://user:pass@host URL without percent-encoding. The supervisor
-// also knows how to (re-)generate credentials at first run as a safety
-// net if this file ever arrives without them.
+// 8-char credential generator. Charset is the RFC 3986 unreserved subset
+// so the value can sit verbatim in a rtsp://user:pass@host URL without
+// percent-encoding. The supervisor also knows how to (re-)generate
+// credentials at first run as a safety net if this file ever arrives
+// without them.
+//
+// Two Pascal Script dialect quirks we've already hit on the GitHub
+// Actions runner's Inno Setup install (Chocolatey-provided):
+//   * v0.3.3 -- local `const` inside a function: rejected.
+//   * v0.3.4 -- the `Randomize` standalone procedure: rejected with
+//     "Unknown identifier 'Randomize'".
+// To avoid further dialect surprises we use ONLY the documented Inno
+// support functions (GetTickCount + basic arithmetic, xor, shr) and
+// roll a small mixer ourselves rather than depending on Pascal's
+// Random/Randomize. The output quality is more than enough for an
+// 8-character init credential that the user can change in the WPF
+// Security section anyway.
 function GenCredential(Len: Integer): String;
 var
-  // Pascal Script (the dialect Inno Setup uses) doesn't accept local
-  // `const` declarations inside functions on every Inno Setup version
-  // shipped via Chocolatey (the CI runner uses one). Keep this as a
-  // plain var so the installer compiles everywhere.
   Alphabet: String;
   I:        Integer;
+  Seed:     Integer;
+  Idx:      Integer;
+  Alen:     Integer;
 begin
   Alphabet := 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~';
-  Result := '';
-  for I := 1 to Len do
-    Result := Result + Copy(Alphabet, Random(Length(Alphabet)) + 1, 1);
+  Alen     := Length(Alphabet);
+  Result   := '';
+  // GetTickCount is the ms-since-boot counter, documented in the Inno
+  // Setup support-function reference. Plenty of variability for our
+  // purposes; two installs would have to happen within the same ms
+  // on the same machine for the seed to collide.
+  Seed := GetTickCount;
+  for I := 1 to Len do begin
+    // Cheap mixer: add a large prime offset per position then xor the
+    // upper-shifted bits in to spread entropy. Stays within signed
+    // 32-bit so we don't hit Pascal Script's overflow check.
+    Seed := Seed + 1103515245;
+    Seed := Seed xor (Seed shr 13);
+    Idx  := Seed mod Alen;
+    // Pascal's mod can return negative when Seed is negative; normalise.
+    if Idx < 0 then Idx := Idx + Alen;
+    Result := Result + Copy(Alphabet, Idx + 1, 1);
+  end;
 end;
 
 // Write the initial settings.json once installation completes. The
@@ -237,7 +263,7 @@ begin
     // post-install via the WPF Security section).
     if FileExists(SettingsPath) then exit;
 
-    Randomize;   // seed Pascal RNG from current time
+    // No Randomize call: GenCredential seeds itself from GetTickCount.
     StreamAll    := WizardIsTaskSelected('streamall');
     ViewerUser   := GenCredential(8);
     ViewerPass   := GenCredential(8);
