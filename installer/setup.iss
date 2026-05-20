@@ -155,9 +155,17 @@ Name: "{app}";        Permissions: users-modify
 Name: "{app}\probes"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+; AppUserModelID stamps System.AppUserModel.ID into the .lnk PropertyStore.
+; This MUST match App.xaml.cs::Aumid ("WebcamStreamer.Host"); the Windows
+; toast subsystem looks up the process AUMID in Start Menu shortcuts and
+; silently drops every toast if no shortcut carries it. The original
+; design comment claimed Microsoft.Toolkit.Uwp.Notifications 7.x would
+; auto-create a stamped shortcut on first Show() -- empirically false
+; once an installer-created (un-stamped) shortcut already exists, which
+; is why toasts were broken on every installed build prior to this.
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "WebcamStreamer.Host"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "WebcamStreamer.Host"; Tasks: desktopicon
 
 [Registry]
 ; Per-user autostart entry. Tasks: autostart binds creation to the
