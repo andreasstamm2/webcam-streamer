@@ -43,44 +43,22 @@ jobs:
       - name: Set up .NET 9
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          # Pin a specific SDK build rather than the floating '9.0.x' so
+          # CI consistently matches what the developer has installed
+          # locally. Bump when the local dev's SDK + scripts/check-build-env.ps1
+          # EXPECT_DOTNET are updated in lockstep.
+          dotnet-version: '9.0.308'
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Inno Setup (pinned)
         shell: pwsh
-        # Pin a known Inno Setup release via direct download instead of
-        # `choco install innosetup`. The Chocolatey package was shipping
-        # an Inno Setup whose Pascal Script engine rejected modern
-        # symbols (const-in-function, Randomize, GetTickCount) -- see
-        # the v0.3.3..v0.3.5 commit trail. The official binary is
-        # released on GitHub at jrsoftware/issrc; the URL pattern is
-        # is-X_Y_Z for the tag (underscores) and innosetup-X.Y.Z.exe
-        # for the filename (dots). Bump both when upgrading.
-        run: |
-          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_2/innosetup-6.7.2.exe'
-          $exe = Join-Path $env:RUNNER_TEMP 'innosetup-installer.exe'
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
-          # Silent install flags (https://jrsoftware.org/ishelp/index.php?topic=setupcmdline):
-          #   /VERYSILENT      no UI
-          #   /SUPPRESSMSGBOXES skip any leftover dialogs
-          #   /SP-              don't show the "this will install..." prompt
-          #   /NORESTART        never reboot the runner
-          $p = Start-Process -FilePath $exe `
-              -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART' `
-              -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Inno Setup installer exited with $($p.ExitCode)" }
-          # Inno Setup 6 lands under Program Files (x86) on 64-bit Windows;
-          # search Program Files too just in case a future release moves.
-          $iscc = Get-ChildItem -Path `
-              'C:\Program Files (x86)\Inno Setup 6', `
-              'C:\Program Files\Inno Setup 6' `
-              -Filter ISCC.exe -EA 0 | Select-Object -First 1
-          if (-not $iscc) { throw "ISCC.exe not found after install" }
-          Write-Host "ISCC: $($iscc.FullName)"
-          "ISCC_PATH=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+        # Single source of truth for the Inno Setup version used by
+        # local and CI builds. The shared script writes ISCC_PATH into
+        # $GITHUB_ENV when it sees that var, so the downstream "Build
+        # installer" step can pick it up.
+        run: .\scripts\install-inno-setup.ps1
 
       - name: Fetch third-party binaries (MediaMTX, FFmpeg, nlohmann/json)
         shell: pwsh

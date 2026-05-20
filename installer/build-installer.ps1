@@ -14,11 +14,15 @@
     installer filename and metadata.
 
 .PARAMETER IsccPath
-    Path to ISCC.exe. Defaults to the standard Inno Setup 6 install dir.
+    Explicit path to ISCC.exe to use. If omitted, the script auto-pins
+    a known-good Inno Setup version under <repo>\tools via
+    scripts\install-inno-setup.ps1 (download on first run, cached
+    afterwards). Set $env:INNO_SETUP_EXE to point at a hand-installed
+    Inno Setup if you'd rather use that.
 #>
 param(
-    [string]$Version = "0.1.0",
-    [string]$IsccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    [string]$Version  = "0.1.0",
+    [string]$IsccPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,10 +30,16 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Write-Host "Repo root: $RepoRoot"
 
-# --- Sanity checks -----------------------------------------------------------
-
-if (-not (Test-Path $IsccPath)) {
-    throw "Inno Setup compiler not found at '$IsccPath'. Install from https://jrsoftware.org/isdl.php or pass -IsccPath."
+# --- Pin Inno Setup (shared with CI) ----------------------------------------
+# install-inno-setup.ps1 downloads the official Inno Setup binary on
+# first use and caches it under <repo>\tools, eliminating the
+# local-vs-CI drift that broke v0.3.0..v0.3.5. Honours -IsccPath and
+# $env:INNO_SETUP_EXE overrides for devs who prefer a hand-installed
+# Inno Setup.
+if ($IsccPath) {
+    if (-not (Test-Path $IsccPath)) { throw "Inno Setup compiler not found at '$IsccPath'." }
+} else {
+    $IsccPath = & "$PSScriptRoot\..\scripts\install-inno-setup.ps1"
 }
 
 foreach ($p in @(

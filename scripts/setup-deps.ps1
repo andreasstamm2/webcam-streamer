@@ -1,8 +1,21 @@
-# Downloads MediaMTX + FFmpeg into third_party/
+# Downloads MediaMTX + FFmpeg + nlohmann/json into third_party/.
 # Idempotent: skips downloads if binaries already exist.
+#
+# All three downloads are PINNED to specific upstream versions. Earlier
+# revisions of this script pulled "latest" which made local-vs-CI drift
+# possible and silent: an upstream patch in any of these tools would
+# enter CI builds with no warning. To bump, change the X_VERSION block
+# below and run setup-deps.ps1 again (it'll re-download because the
+# expected paths reference the new version).
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'  # speed up Invoke-WebRequest
+
+# --- Pinned versions. Bump in lockstep with BUILDING.md and the
+#     -p:Version embedded by the release workflow.
+$MEDIAMTX_VERSION = '1.18.2'           # bluenviron/mediamtx GitHub Release tag (sans 'v')
+$FFMPEG_VERSION   = '8.1.1'            # GyanD/codexffmpeg GitHub Release tag
+$NLOHMANN_VERSION = '3.12.0'           # nlohmann/json GitHub Release tag (sans 'v')
 
 $root        = Split-Path -Parent $PSScriptRoot
 $thirdParty  = Join-Path $root 'third_party'
@@ -15,17 +28,14 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 function Get-MediaMtx {
     if (Test-Path $mtxExe) {
-        Write-Host "[mediamtx] already present at $mtxExe — skip" -ForegroundColor DarkGray
+        Write-Host "[mediamtx] already present at $mtxExe -- skip" -ForegroundColor DarkGray
         return
     }
-    Write-Host "[mediamtx] querying latest release..." -ForegroundColor Cyan
-    $api = 'https://api.github.com/repos/bluenviron/mediamtx/releases/latest'
-    $rel = Invoke-RestMethod -Uri $api -UseBasicParsing -Headers @{ 'User-Agent' = 'webcam-streamer-setup' }
-    $asset = $rel.assets | Where-Object { $_.name -match 'windows_amd64\.zip$' } | Select-Object -First 1
-    if (-not $asset) { throw "No Windows amd64 zip in latest mediamtx release" }
-    $zip = Join-Path $tmp $asset.name
-    Write-Host "[mediamtx] downloading $($asset.name) ..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
+    $assetName = "mediamtx_v${MEDIAMTX_VERSION}_windows_amd64.zip"
+    $url       = "https://github.com/bluenviron/mediamtx/releases/download/v$MEDIAMTX_VERSION/$assetName"
+    $zip       = Join-Path $tmp $assetName
+    Write-Host "[mediamtx] downloading $url ..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
     Write-Host "[mediamtx] extracting to $mtxDir" -ForegroundColor Cyan
     Expand-Archive -Path $zip -DestinationPath $mtxDir -Force
     if (-not (Test-Path $mtxExe)) { throw "mediamtx.exe not found after extract" }
@@ -34,14 +44,18 @@ function Get-MediaMtx {
 
 function Get-FFmpeg {
     if (Test-Path $ffExe) {
-        Write-Host "[ffmpeg] already present at $ffExe — skip" -ForegroundColor DarkGray
+        Write-Host "[ffmpeg] already present at $ffExe -- skip" -ForegroundColor DarkGray
         return
     }
-    # gyan.dev "release-essentials" includes libx264, libx265, nvenc/qsv/amf hooks via runtime-loaded DLLs
-    $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
-    $zip = Join-Path $tmp 'ffmpeg-release-essentials.zip'
+    # GyanD's codexffmpeg GitHub Releases host the same "essentials"
+    # builds gyan.dev links at, but with a stable per-version URL --
+    # whereas https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+    # rolls forward as the maintainer ships new releases.
+    $assetName = "ffmpeg-$FFMPEG_VERSION-essentials_build.zip"
+    $url       = "https://github.com/GyanD/codexffmpeg/releases/download/$FFMPEG_VERSION/$assetName"
+    $zip       = Join-Path $tmp $assetName
     if (-not (Test-Path $zip)) {
-        Write-Host "[ffmpeg] downloading from gyan.dev (essentials, ~80 MB)..." -ForegroundColor Cyan
+        Write-Host "[ffmpeg] downloading $url (essentials, ~80 MB)..." -ForegroundColor Cyan
         Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
     }
     Write-Host "[ffmpeg] extracting..." -ForegroundColor Cyan
@@ -52,7 +66,7 @@ function Get-FFmpeg {
     $bin = Get-ChildItem -Path $extractTmp -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
     if (-not $bin) { throw "ffmpeg.exe not found inside archive" }
     $srcBin = $bin.Directory.FullName
-    # $ffDir must exist as a directory BEFORE the pipe-copy below — otherwise
+    # $ffDir must exist as a directory BEFORE the pipe-copy below -- otherwise
     # PowerShell treats it as a single destination filename, the first piped
     # FileInfo gets copied to that name, subsequent items overwrite it, and
     # ffmpeg.exe never lands at $ffDir\ffmpeg.exe. Locally the dir survives
@@ -71,8 +85,8 @@ function Get-NlohmannJson {
         return
     }
     New-Item -ItemType Directory -Force -Path $jsonHeaderDir | Out-Null
-    Write-Host "[nlohmann/json] downloading single-header release..." -ForegroundColor Cyan
-    $url = 'https://github.com/nlohmann/json/releases/latest/download/json.hpp'
+    $url = "https://github.com/nlohmann/json/releases/download/v$NLOHMANN_VERSION/json.hpp"
+    Write-Host "[nlohmann/json] downloading $url ..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $url -OutFile $jsonHeader -UseBasicParsing
     if (-not (Test-Path $jsonHeader)) { throw "json.hpp not present after download" }
     $sz = (Get-Item $jsonHeader).Length
