@@ -48,12 +48,35 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install Inno Setup
+      - name: Install Inno Setup (pinned)
         shell: pwsh
+        # Pin a known Inno Setup release via direct download instead of
+        # `choco install innosetup`. The Chocolatey package was shipping
+        # an Inno Setup whose Pascal Script engine rejected modern
+        # symbols (const-in-function, Randomize, GetTickCount) -- see
+        # the v0.3.3..v0.3.5 commit trail. Direct download from
+        # jrsoftware.org gives us a deterministic, current build that
+        # we control. Bump the URL when we want a newer Inno Setup.
         run: |
-          choco install innosetup --no-progress -y
-          # ISCC.exe lands in C:\Program Files (x86)\Inno Setup 6\ISCC.exe
-          $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup 6' -Filter ISCC.exe -EA 0 | Select-Object -First 1
+          $url = 'https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup-installer.exe'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+          # Silent install flags (https://jrsoftware.org/ishelp/index.php?topic=setupcmdline):
+          #   /VERYSILENT      no UI
+          #   /SUPPRESSMSGBOXES skip any leftover dialogs
+          #   /SP-              don't show the "this will install..." prompt
+          #   /NORESTART        never reboot the runner
+          $p = Start-Process -FilePath $exe `
+              -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART' `
+              -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Inno Setup installer exited with $($p.ExitCode)" }
+          # Inno Setup 6 lands under Program Files (x86) on 64-bit Windows;
+          # search Program Files too just in case a future release moves.
+          $iscc = Get-ChildItem -Path `
+              'C:\Program Files (x86)\Inno Setup 6', `
+              'C:\Program Files\Inno Setup 6' `
+              -Filter ISCC.exe -EA 0 | Select-Object -First 1
           if (-not $iscc) { throw "ISCC.exe not found after install" }
           Write-Host "ISCC: $($iscc.FullName)"
           "ISCC_PATH=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
