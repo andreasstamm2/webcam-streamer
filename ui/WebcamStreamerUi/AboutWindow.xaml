@@ -35,7 +35,11 @@
 
         <!-- Row 0: icon + product name + version, in a single horizontal block -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,16">
-            <Image Width="64" Height="64" Source="/app.ico"
+            <!-- Use the dedicated 256x256 PNG (embedded as app-256.png)
+                 so WPF scales the largest source down to the 64px slot
+                 instead of pulling a smaller frame out of the .ico and
+                 scaling it up. -->
+            <Image Width="64" Height="64" Source="/app-256.png"
                    VerticalAlignment="Top"/>
 
             <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">

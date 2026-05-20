@@ -494,8 +494,8 @@
                                         MinWidth="56"
                                         Margin="6,0,0,0"
                                         VerticalAlignment="Center"
-                                        ToolTip="Copy this RTSP URL to the clipboard"/>
-                                <TextBox Text="{Binding FullUrl, Mode=OneWay}"
+                                        ToolTip="Copy this RTSP URL (with real credentials) to the clipboard"/>
+                                <TextBox Text="{Binding DisplayUrl, Mode=OneWay}"
                                          IsReadOnly="True" BorderThickness="0"
                                          Background="Transparent"
                                          Foreground="{StaticResource accent}"

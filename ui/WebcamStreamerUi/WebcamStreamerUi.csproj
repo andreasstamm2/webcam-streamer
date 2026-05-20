@@ -21,7 +21,7 @@
          so this value is just the fallback for local `dotnet run` /
          `dotnet build`. Keep it in sync with the next planned release so
          devs running the bare exe don't see a stale About box. -->
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
     <Authors>Andreas Stamm</Authors>
     <Company>Andreas Stamm</Company>
     <Product>Webcam Streamer</Product>
@@ -39,6 +39,12 @@
          (Application.GetResourceStream("/app.ico")). <Link> gives it a
          stable in-assembly path regardless of where the source sits. -->
     <Resource Include="..\..\assets\icons\app.ico" Link="app.ico"/>
+    <!-- The 256x256 PNG variant is also embedded so the About dialog can
+         render the largest art without WPF's ICO decoder picking a
+         smaller frame and scaling it up. The .ico above is still the
+         right thing for window chrome / tray / taskbar; Windows picks
+         the correct size per use-case from the multi-resolution file. -->
+    <Resource Include="..\..\assets\icons\icon-256.png" Link="app-256.png"/>
   </ItemGroup>
 
   <ItemGroup>

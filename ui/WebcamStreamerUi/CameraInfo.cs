@@ -47,9 +47,10 @@ public sealed class CameraInfo : INotifyPropertyChanged
     public int    Restarts    { get => _restarts;    set => Set(ref _restarts,    value); }
     public int    ViewerCount { get => _viewerCount; set => Set(ref _viewerCount, value); }
     // Current viewer credentials echoed by the supervisor (global config,
-    // sent per-row for ease of binding to FullUrl). Updating these makes
-    // FullUrl recompute, so the per-row "Copy" button always reflects the
-    // currently-applied password.
+    // sent per-row for ease of access). Updating these makes ClipboardUrl
+    // recompute, so the per-row Copy button always emits a URL with the
+    // currently-applied password. DisplayUrl is unaffected -- it always
+    // shows <username>/<password> placeholders.
     public string ViewerUser     { get => _viewerUser; set => Set(ref _viewerUser, value); }
     public string ViewerPassword { get => _viewerPass; set => Set(ref _viewerPass, value); }
 
@@ -101,12 +102,21 @@ public sealed class CameraInfo : INotifyPropertyChanged
         }
     }
 
-    // Per-row RTSP URL with current viewer credentials baked in. User and
-    // password are URL-encoded so any character a user might pick (after
-    // editing the generated value in the Security section) stays
-    // syntactically valid. If creds haven't arrived yet (initial race),
-    // fall back to placeholder so the UI doesn't show ":@host".
-    public string FullUrl
+    // Two flavours of the per-row RTSP URL:
+    //
+    //   DisplayUrl   -> shown in the table. Username/password are
+    //                   substituted with <username>/<password> placeholders
+    //                   so a casual onlooker / screenshot doesn't leak the
+    //                   real credentials.
+    //   ClipboardUrl -> emitted when the user presses the per-row Copy
+    //                   button. Real creds, URL-encoded, ready to paste
+    //                   into VLC / a WebEye / curl etc.
+    //
+    // Both rebuild on Path / ViewerUser / ViewerPassword changes via the
+    // Set() helper below.
+    public string DisplayUrl   => $"rtsp://<username>:<password>@127.0.0.1:8554{_path}";
+
+    public string ClipboardUrl
     {
         get
         {
@@ -123,9 +133,18 @@ public sealed class CameraInfo : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
-        if (prop == nameof(Path))           PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
-        if (prop == nameof(ViewerUser))     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
-        if (prop == nameof(ViewerPassword)) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullUrl)));
+        if (prop == nameof(Path))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayUrl)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ClipboardUrl)));
+        }
+        if (prop == nameof(ViewerUser) || prop == nameof(ViewerPassword))
+        {
+            // DisplayUrl doesn't depend on the creds (it only renders
+            // placeholders), but ClipboardUrl does -- only the latter
+            // needs refreshing when creds rotate.
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ClipboardUrl)));
+        }
         if (prop == nameof(ViewerCount))    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasViewers)));
         // Changing the Mode changes which advertised formats are eligible
         // for the Resolution dropdown -- re-raise so the combo refreshes.

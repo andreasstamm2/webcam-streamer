@@ -179,7 +179,7 @@ public partial class MainWindow : Window
             // set-viewer-credentials restarts mediamtx server-side, which
             // briefly kicks any connected viewer. The subsequent
             // cameras-changed event re-pushes every row (with the new
-            // creds baked into FullUrl).
+            // creds reflected in ClipboardUrl).
             await _ipc.CallAsync("set-viewer-credentials",
                                  new { user, pass },
                                  timeoutMs: 15000);
@@ -205,7 +205,10 @@ public partial class MainWindow : Window
             // Fully qualified: this project enables UseWindowsForms (for
             // NotifyIcon), so `Clipboard` is ambiguous with
             // System.Windows.Forms.Clipboard. We want the WPF one.
-            System.Windows.Clipboard.SetText(cam.FullUrl);
+            // The table shows DisplayUrl (with <username>/<password>
+            // placeholders); only the Copy button reveals the real
+            // credentials by emitting ClipboardUrl.
+            System.Windows.Clipboard.SetText(cam.ClipboardUrl);
         }
         catch (Exception ex)
         {
