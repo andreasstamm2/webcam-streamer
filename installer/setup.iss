@@ -204,11 +204,15 @@ Type: files;          Name: "{app}\mediamtx.runtime.yml"
 // also knows how to (re-)generate credentials at first run as a safety
 // net if this file ever arrives without them.
 function GenCredential(Len: Integer): String;
-const
-  Alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~';
 var
-  I: Integer;
+  // Pascal Script (the dialect Inno Setup uses) doesn't accept local
+  // `const` declarations inside functions on every Inno Setup version
+  // shipped via Chocolatey (the CI runner uses one). Keep this as a
+  // plain var so the installer compiles everywhere.
+  Alphabet: String;
+  I:        Integer;
 begin
+  Alphabet := 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~';
   Result := '';
   for I := 1 to Len do
     Result := Result + Copy(Alphabet, Random(Length(Alphabet)) + 1, 1);
