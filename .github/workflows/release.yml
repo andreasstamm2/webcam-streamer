@@ -54,11 +54,12 @@ jobs:
         # `choco install innosetup`. The Chocolatey package was shipping
         # an Inno Setup whose Pascal Script engine rejected modern
         # symbols (const-in-function, Randomize, GetTickCount) -- see
-        # the v0.3.3..v0.3.5 commit trail. Direct download from
-        # jrsoftware.org gives us a deterministic, current build that
-        # we control. Bump the URL when we want a newer Inno Setup.
+        # the v0.3.3..v0.3.5 commit trail. The official binary is
+        # released on GitHub at jrsoftware/issrc; the URL pattern is
+        # is-X_Y_Z for the tag (underscores) and innosetup-X.Y.Z.exe
+        # for the filename (dots). Bump both when upgrading.
         run: |
-          $url = 'https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe'
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_2/innosetup-6.7.2.exe'
           $exe = Join-Path $env:RUNNER_TEMP 'innosetup-installer.exe'
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
