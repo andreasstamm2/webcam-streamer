@@ -183,6 +183,10 @@ public partial class MainWindow : Window
             await _ipc.CallAsync("set-viewer-credentials",
                                  new { user, pass },
                                  timeoutMs: 15000);
+            // Clear the dirty flag so the next periodic refresh is free
+            // to resync from the supervisor (which now stores these
+            // exact values).
+            _vm.MarkCredentialsApplied();
         }
         catch (Exception ex)
         {

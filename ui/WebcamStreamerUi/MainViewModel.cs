@@ -44,10 +44,51 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // on-type password input. Editing here doesn't persist anywhere by
     // itself; the Security section's Apply button is what calls
     // set-viewer-credentials.
+    //
+    // Subtlety: the MainWindow runs a 5-second poll that re-pulls
+    // get-status, and the supervisor also emits cameras-changed events.
+    // Both paths flow back into ApplyCameraList -> credential promotion.
+    // If we just assigned ViewerUser/ViewerPassword unconditionally there,
+    // the user's half-typed entry would get clobbered every ~5s. We
+    // therefore raise _credentialsDirty as soon as the user edits either
+    // field (the binding calls the setter), and skip the promotion while
+    // dirty. The flag is cleared after a successful Apply, so the next
+    // round-trip resyncs to what the supervisor now stores.
     private string _viewerUser = "";
     private string _viewerPass = "";
-    public string ViewerUser     { get => _viewerUser; set => Set(ref _viewerUser, value); }
-    public string ViewerPassword { get => _viewerPass; set => Set(ref _viewerPass, value); }
+    private bool   _credentialsDirty;
+    public string ViewerUser
+    {
+        get => _viewerUser;
+        set { if (Set(ref _viewerUser, value)) _credentialsDirty = true; }
+    }
+    public string ViewerPassword
+    {
+        get => _viewerPass;
+        set { if (Set(ref _viewerPass, value)) _credentialsDirty = true; }
+    }
+
+    // Seeds the bound credentials from a supervisor snapshot WITHOUT
+    // flipping the dirty flag. No-ops once the user has started editing,
+    // so the 5-second poll cannot clobber an in-progress entry.
+    public void SeedViewerCredentialsFromSupervisor(string user, string pass)
+    {
+        if (_credentialsDirty) return;
+        if (!string.IsNullOrEmpty(user) && user != _viewerUser)
+        {
+            _viewerUser = user;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ViewerUser)));
+        }
+        if (!string.IsNullOrEmpty(pass) && pass != _viewerPass)
+        {
+            _viewerPass = pass;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ViewerPassword)));
+        }
+    }
+
+    // Call after a successful set-viewer-credentials so the next refresh
+    // resyncs from the supervisor (which now stores what we just typed).
+    public void MarkCredentialsApplied() => _credentialsDirty = false;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -95,12 +136,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // Promote viewer credentials from whichever row arrived so the
         // Security section sees them. They're identical across rows
         // (global supervisor setting echoed per-row), so the first row
-        // wins.
+        // wins. The seed path skips the assignment if the user is
+        // currently editing -- see SeedViewerCredentialsFromSupervisor.
         if (Cameras.Count > 0)
         {
             var first = Cameras[0];
-            if (!string.IsNullOrEmpty(first.ViewerUser)     && first.ViewerUser     != ViewerUser)     ViewerUser     = first.ViewerUser;
-            if (!string.IsNullOrEmpty(first.ViewerPassword) && first.ViewerPassword != ViewerPassword) ViewerPassword = first.ViewerPassword;
+            SeedViewerCredentialsFromSupervisor(first.ViewerUser, first.ViewerPassword);
         }
     }
 

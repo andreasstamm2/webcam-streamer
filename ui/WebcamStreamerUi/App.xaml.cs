@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;      // Mutex, EventWaitHandle
 using System.Windows;        // StartupEventArgs, ExitEventArgs, WindowState
 
 namespace WebcamStreamerUi;
@@ -33,9 +34,70 @@ public partial class App : System.Windows.Application
     private TrayIcon?   _tray;
     private MainWindow? _mainWindow;
 
+    // Single-instance guard. The supervisor's named pipe is system-wide and
+    // single-server, so two concurrent UIs would race: the second's
+    // supervisor can't create the pipe, and the UI eventually times out
+    // with "IPC connect failed". We avoid that by holding a session-scoped
+    // named mutex for the lifetime of the first UI, and using a named
+    // EventWaitHandle as a "please show your window" doorbell for follow-up
+    // launches (Start Menu / desktop shortcut while we're tray-resident).
+    //
+    // Names are session-scoped (Local\) on purpose: the app is per-user and
+    // creating Global\ kernel objects requires SeCreateGlobalPrivilege,
+    // which a standard user lacks. Two users on the same machine each get
+    // their own first instance; if their sessions then collide on the
+    // supervisor pipe itself, the second user's supervisor will fail to
+    // start and that case still needs the existing error path. Worth it
+    // for the common single-user double-click scenario.
+    private const string SingleInstanceMutexName = @"Local\WebcamStreamer.Host.Mutex";
+    private const string ShowWindowEventName     = @"Local\WebcamStreamer.Host.ShowWindow";
+    private Mutex?           _instanceMutex;
+    private EventWaitHandle? _showWindowEvent;
+    private Thread?          _showWindowListener;
+    private volatile bool    _shuttingDown;
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // --- single-instance check (do this BEFORE any side effects like
+        // spawning the supervisor or registering the tray icon). ---
+        _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName,
+                                   out bool createdNew);
+        if (!createdNew)
+        {
+            // Someone else owns the mutex. Knock on their doorbell, then
+            // exit without doing any other startup work. If the running
+            // instance is still very early in its startup it may not have
+            // created the event yet -- in that race we just exit silently,
+            // since the user's launch attempt at least proved the first
+            // instance is alive and they'll see its window shortly.
+            try
+            {
+                using var ev = EventWaitHandle.OpenExisting(ShowWindowEventName);
+                ev.Set();
+            }
+            catch (WaitHandleCannotBeOpenedException) { /* race; ignore */ }
+            catch (Exception ex) { Debug.WriteLine("doorbell signal: " + ex.Message); }
+
+            // We never owned the mutex, so do not release it.
+            _instanceMutex.Dispose();
+            _instanceMutex = null;
+            Shutdown(0);
+            return;
+        }
+
+        // First instance. Create the doorbell event and the listener that
+        // turns each "ring" into a Dispatcher-thread ShowMainWindow().
+        _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset,
+                                               ShowWindowEventName);
+        _showWindowListener = new Thread(ShowWindowListenerLoop)
+        {
+            IsBackground = true,
+            Name = "show-window-listener",
+        };
+        _showWindowListener.Start();
+
         Instance = this;
 
         SetCurrentProcessExplicitAppUserModelID(Aumid);
@@ -235,12 +297,49 @@ public partial class App : System.Windows.Application
         w.ShowDialog();
     }
 
+    // Background worker that waits on the cross-process "show window"
+    // doorbell and turns each signal into a Dispatcher-marshalled
+    // ShowMainWindow(). Exits when the event is disposed during shutdown.
+    private void ShowWindowListenerLoop()
+    {
+        var ev = _showWindowEvent;
+        if (ev == null) return;
+        while (!_shuttingDown)
+        {
+            try
+            {
+                if (!ev.WaitOne()) break;
+                if (_shuttingDown) break;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    try { ShowMainWindow(); }
+                    catch (Exception ex) { Debug.WriteLine("show-on-doorbell: " + ex.Message); }
+                });
+            }
+            catch (ObjectDisposedException) { break; }
+            catch (AbandonedMutexException)  { break; }
+        }
+    }
+
+    private void DisposeSingleInstanceGuard()
+    {
+        _shuttingDown = true;
+        try { _showWindowEvent?.Set(); }  catch { /* may already be disposed */ }
+        try { _showWindowEvent?.Dispose(); } catch { }
+        _showWindowEvent = null;
+
+        try { _instanceMutex?.ReleaseMutex(); } catch { /* not owned or already released */ }
+        try { _instanceMutex?.Dispose(); } catch { }
+        _instanceMutex = null;
+    }
+
     private void ExitApp()
     {
         try { _ = Ipc?.CallAsync("shutdown"); } catch { /* may not respond */ }
         _tray?.Dispose();
         Ipc?.Dispose();
         Launcher?.Dispose();   // closes Job Object handle -> KILL_ON_JOB_CLOSE
+        DisposeSingleInstanceGuard();
         Shutdown(0);
     }
 
@@ -249,6 +348,7 @@ public partial class App : System.Windows.Application
         _tray?.Dispose();
         Ipc?.Dispose();
         Launcher?.Dispose();
+        DisposeSingleInstanceGuard();
         base.OnExit(e);
     }
 }

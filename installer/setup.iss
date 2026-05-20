@@ -105,11 +105,14 @@ Name: "autostart";   Description: "Start automatically when I log in to Windows"
 
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
-; Firewall rule for MediaMTX (RTSP port 8554). On per-user install this
-; task forces a UAC elevation because the firewall rule lives in the
-; system policy store -- accepted trade-off documented in the grilled
-; design.
-Name: "firewall";    Description: "Allow Webcam Streamer through the Windows Firewall (RTSP port 8554)"; GroupDescription: "Network:"; Flags: checkedonce
+; Firewall rule for MediaMTX (RTSP port 8554). The rule lives in the
+; system policy store, so creating it always requires Administrator.
+; On a per-machine install the wizard is already elevated and no extra
+; UAC popup appears. On a per-user install the [Code] handler escalates
+; just this step via ShellExec('runas', ...) -- the user sees one UAC
+; prompt scoped to the firewall change. If they decline, the rest of
+; the install still completes.
+Name: "firewall";    Description: "Allow Webcam Streamer through the Windows Firewall (RTSP port 8554) — requires Administrator approval"; GroupDescription: "Network:"; Flags: checkedonce
 
 [Files]
 ; --- Main app: WPF UI (self-contained single-file publish) ---
@@ -166,10 +169,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-; Windows Firewall rule (RTSP listener on TCP 8554 — UDP is disabled in
-; mediamtx.yml). Idempotent: deletes any prior rule first.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Webcam Streamer (RTSP)"""; Flags: runhidden; Tasks: firewall
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Webcam Streamer (RTSP)"" dir=in action=allow protocol=TCP localport=8554 program=""{app}\third_party\mediamtx\mediamtx.exe"" enable=yes"; Flags: runhidden; Tasks: firewall
+; The Windows Firewall rule (RTSP listener on TCP 8554 -- UDP is disabled
+; in mediamtx.yml) is created from [Code]::ApplyFirewallRule via
+; ShellExec('runas', ...) so it elevates correctly on per-user installs.
+; See CurStepChanged below.
 
 ; Offer to launch immediately after install finishes.
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
@@ -185,8 +188,8 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM supervisor.exe /T";       Fl
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM mediamtx.exe /T";         Flags: runhidden; RunOnceId: "KillMtx"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ffmpeg.exe /T";           Flags: runhidden; RunOnceId: "KillFf"
 
-; Remove the firewall rule we created.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Webcam Streamer (RTSP)"""; Flags: runhidden; RunOnceId: "DelFwRule"
+; The firewall rule is removed from [Code]::CurUninstallStepChanged via
+; ShellExec('runas', ...) so the delete elevates on per-user uninstalls.
 
 [UninstallDelete]
 ; Per-user state (probes + settings.json) is wiped on uninstall per the
@@ -198,17 +201,58 @@ Type: files;          Name: "{app}\settings.json"
 Type: files;          Name: "{app}\mediamtx.runtime.yml"
 
 [Code]
-// Initial settings.json on a fresh install. Only the two booleans live
-// here; the supervisor seeds viewer credentials on its first run when
-// they're missing from settings.json (see settings.cpp::LoadSettings +
-// the GenerateRandomCredential fallback in main.cpp). That keeps this
-// [Code] section trivial Pascal Script -- no Random/Randomize/
-// GetTickCount, no functions with local consts -- since the Chocolatey-
-// distributed Inno Setup that the GitHub Actions runner used to install
-// in v0.3.0..v0.3.4 was old enough to choke on any of those.
-//
-// We pin a modern Inno Setup binary in release.yml as a second line of
-// defence, but keeping the script itself minimal is the durable fix.
+// Section-level note: keep this Pascal Script trivial. The supervisor
+// seeds viewer credentials on its first run when they're missing from
+// settings.json (see settings.cpp::LoadSettings + the
+// GenerateRandomCredential fallback in main.cpp), so we deliberately do
+// NOT use Random/Randomize/GetTickCount or functions with local consts
+// here -- the Chocolatey-distributed Inno Setup that the GitHub Actions
+// runner used to install in v0.3.0..v0.3.4 was old enough to choke on
+// any of those. We pin a modern Inno Setup binary in release.yml as a
+// second line of defence, but keeping the script itself minimal is the
+// durable fix.
+
+// Create (or refresh) the Windows Firewall rule that lets MediaMTX
+// listen on TCP 8554. The rule lives in the system policy store, so this
+// always needs Administrator. ShellExec verb 'runas' elevates the child
+// netsh.exe -- on a per-user install Windows shows one UAC prompt; on a
+// per-machine install the parent installer is already elevated and the
+// child inherits the token silently. If the user declines UAC the call
+// fails; we surface an informational message but do NOT abort the
+// install -- the rule can be added later from the WPF Settings dialog or
+// by re-running setup.
+procedure ApplyFirewallRule;
+var
+  ResultCode: Integer;
+  MtxPath:    String;
+  Params:     String;
+  Ok:         Boolean;
+begin
+  MtxPath := ExpandConstant('{app}\third_party\mediamtx\mediamtx.exe');
+
+  // Idempotent: delete any rule with our exact name first. We ignore the
+  // result -- "no such rule" is the common case and not an error.
+  ShellExec('runas', ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="Webcam Streamer (RTSP)"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  Params := 'advfirewall firewall add rule name="Webcam Streamer (RTSP)"' +
+            ' dir=in action=allow protocol=TCP localport=8554' +
+            ' program="' + MtxPath + '" enable=yes';
+  Ok := ShellExec('runas', ExpandConstant('{sys}\netsh.exe'),
+          Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // ShellExec returns False when the UAC prompt is declined (or netsh
+  // could not be launched at all). ResultCode is netsh's exit code when
+  // Ok=True; non-zero there means the rule was rejected by Windows.
+  if (not Ok) or (ResultCode <> 0) then begin
+    MsgBox('Could not add the Windows Firewall rule for RTSP port 8554. ' +
+           'You can add it later from the Settings dialog of the Webcam' + #13#10 +
+           'Streamer app, or by re-running this installer.',
+           mbInformation, MB_OK);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   SettingsPath: String;
@@ -219,16 +263,36 @@ begin
     SettingsPath := ExpandConstant('{app}\settings.json');
     // Preserve existing file on upgrade (user may have changed creds
     // post-install via the WPF Security section).
-    if FileExists(SettingsPath) then exit;
+    if not FileExists(SettingsPath) then begin
+      StreamAll := WizardIsTaskSelected('streamall');
+      Contents :=
+        '{' + #13#10 +
+        '  "notifications_enabled": true,' + #13#10 +
+        '  "default_enabled_for_new_cameras": ';
+      if StreamAll then Contents := Contents + 'true'
+      else              Contents := Contents + 'false';
+      Contents := Contents + #13#10 + '}' + #13#10;
+      SaveStringToFile(SettingsPath, Contents, False);
+    end;
 
-    StreamAll := WizardIsTaskSelected('streamall');
-    Contents :=
-      '{' + #13#10 +
-      '  "notifications_enabled": true,' + #13#10 +
-      '  "default_enabled_for_new_cameras": ';
-    if StreamAll then Contents := Contents + 'true'
-    else              Contents := Contents + 'false';
-    Contents := Contents + #13#10 + '}' + #13#10;
-    SaveStringToFile(SettingsPath, Contents, False);
+    if WizardIsTaskSelected('firewall') then
+      ApplyFirewallRule;
+  end;
+end;
+
+// Remove the firewall rule we may have created at install time. We try
+// unconditionally -- the rule name is distinctive, and if it doesn't
+// exist netsh just returns "no rules match". ShellExec 'runas' elevates
+// on per-user uninstalls; on per-machine uninstall the call inherits the
+// already-elevated token. If the user declines UAC the rule stays
+// behind, which is harmless.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then begin
+    ShellExec('runas', ExpandConstant('{sys}\netsh.exe'),
+      'advfirewall firewall delete rule name="Webcam Streamer (RTSP)"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;

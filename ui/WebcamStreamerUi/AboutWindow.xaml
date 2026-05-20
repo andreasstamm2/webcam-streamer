@@ -38,9 +38,13 @@
             <!-- Use the dedicated 256x256 PNG (embedded as app-256.png)
                  so WPF scales the largest source down to the 64px slot
                  instead of pulling a smaller frame out of the .ico and
-                 scaling it up. -->
+                 scaling it up. BitmapScalingMode=HighQuality switches the
+                 downscale from the default bilinear to Fant, which is
+                 markedly sharper at this 4:1 ratio. -->
             <Image Width="64" Height="64" Source="/app-256.png"
-                   VerticalAlignment="Top"/>
+                   VerticalAlignment="Top"
+                   RenderOptions.BitmapScalingMode="HighQuality"
+                   UseLayoutRounding="True" SnapsToDevicePixels="True"/>
 
             <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                 <TextBlock Text="Webcam Streamer"
